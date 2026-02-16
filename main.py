@@ -11,6 +11,10 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.1 (2026-02-16)
+  - ADD: InVideo AI ready-to-paste prompts in all TikTok script outputs
+    (single /tiktok, batch /tiktok5, and /weekly)
+
 v3.0.0 (2026-02-16)
   - NEW: Built from scratch per v3.0 spec
   - Content generation: blog, tiktok, carousel, caption, whatsapp, fbpost, story
@@ -253,6 +257,19 @@ COMPETITORS (differentiate naturally, never attack):
         "tiktok": (
             "\nCONTENT TYPE: TIKTOK SCRIPT\n"
             "Write a TikTok script for 15-60 seconds.\n\n"
+            "After the main JSON fields, also include a field called 'invideo_prompt' — "
+            "this is a ready-to-paste prompt for InVideo AI's Script-to-Video tool. The prompt must:\n"
+            "- Start with 'Create a [duration]-second vertical TikTok video in Spanish'\n"
+            "- Include the full script as the voiceover text\n"
+            "- Specify 'warm Latin American Spanish female voice'\n"
+            "- Describe the text overlays with colors (red for myths/problems, green for solutions/reality)\n"
+            "- Describe the visual style: 'professional stock footage of Spanish streets, documents on desks, "
+            "government buildings, people looking hopeful, immigrant communities'\n"
+            "- Request 'word-by-word animated captions in bold white with black outline'\n"
+            "- Request 'subtle dramatic background music, low volume'\n"
+            "- End with 'Format: 9:16 vertical for TikTok. Style: professional, warm, trustworthy.'\n"
+            "The invideo_prompt should be a single string ready to paste directly into InVideo AI "
+            "with zero editing needed.\n\n"
             "IMPORTANT: Return ONLY valid JSON with this exact structure:\n"
             '{"format": "face-to-camera|green-screen|pov|story-time|myth-vs-reality|quick-tips", '
             '"duration_seconds": number, '
@@ -260,7 +277,8 @@ COMPETITORS (differentiate naturally, never attack):
             '"script": "string (full spoken text)", '
             '"text_overlays": ["string", "string", "string"], '
             '"hashtags": "string", '
-            '"production_tip": "string"}'
+            '"production_tip": "string", '
+            '"invideo_prompt": "string (full ready-to-paste InVideo AI prompt)"}'
         ),
         "carousel": (
             "\nCONTENT TYPE: INSTAGRAM CAROUSEL\n"
@@ -646,6 +664,16 @@ def format_tiktok_for_telegram(data: dict) -> str:
         f"  {i + 1}. {escape_md(o)}" for i, o in enumerate(overlays)
     )
 
+    invideo = data.get("invideo_prompt", "")
+    invideo_section = ""
+    if invideo:
+        invideo_section = (
+            f"\n\n🎬 *INVIDEO PROMPT (paste into invideo.io):*\n"
+            f"───────────────────\n"
+            f"{escape_md(invideo)}\n"
+            f"───────────────────"
+        )
+
     return (
         f"🎬 *TIKTOK SCRIPT*\n\n"
         f"*Format:* {escape_md(data.get('format', 'face-to-camera'))}\n"
@@ -655,6 +683,7 @@ def format_tiktok_for_telegram(data: dict) -> str:
         f"📱 *TEXT OVERLAYS:*\n{overlays_text}\n\n"
         f"#️⃣ {escape_md(data.get('hashtags', ''))}\n\n"
         f"💡 *TIP:* {escape_md(data.get('production_tip', ''))}"
+        f"{invideo_section}"
     )
 
 
