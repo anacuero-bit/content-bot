@@ -11,6 +11,15 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.2 (2026-02-16)
+  - ADD: Topic rotation system to prevent content repetition
+    30+ topics per content type, pillar-weighted distribution for /weekly
+    (40% educational, 25% emotional, 20% news, 10% social proof, 5% behind scenes)
+
+v3.0.1 (2026-02-16)
+  - ADD: InVideo AI ready-to-paste prompts in all TikTok script outputs
+    (single /tiktok, batch /tiktok5, and /weekly)
+
 v3.0.0 (2026-02-16)
   - NEW: Built from scratch per v3.0 spec
   - Content generation: blog, tiktok, carousel, caption, whatsapp, fbpost, story
@@ -31,10 +40,12 @@ import json
 import logging
 import asyncio
 import re
+import random
 import hashlib
 import base64
 import io
 from datetime import datetime, timedelta
+from collections import deque
 from typing import Optional
 from functools import wraps
 
@@ -95,6 +106,292 @@ gen_stats = {
 
 # Telegram max message length
 TG_MAX_LEN = 4096
+
+
+# ==============================================================================
+# TOPIC ROTATION POOL
+# ==============================================================================
+
+# Each topic has: key (unique ID), topic (prompt text), pillar (content category)
+TOPIC_POOL = {
+    "tiktok": [
+        # Educational — myths
+        {"key": "myth_job", "topic": "Mito: necesitas contrato de trabajo", "pillar": "educational"},
+        {"key": "myth_money", "topic": "Mito: la regularización cuesta miles de euros", "pillar": "educational"},
+        {"key": "myth_time", "topic": "Mito: ya es demasiado tarde para prepararse", "pillar": "educational"},
+        {"key": "myth_lawyer", "topic": "Mito: necesitas un abogado carísimo", "pillar": "educational"},
+        {"key": "myth_deport", "topic": "Mito: si pides papeles te deportan", "pillar": "educational"},
+        # Educational — documents
+        {"key": "docs_empadronamiento", "topic": "Cómo conseguir tu empadronamiento", "pillar": "educational"},
+        {"key": "docs_antecedentes", "topic": "Certificado de antecedentes paso a paso", "pillar": "educational"},
+        {"key": "docs_medical", "topic": "El certificado médico: qué es y dónde sacarlo", "pillar": "educational"},
+        {"key": "docs_passport", "topic": "Pasaporte vencido: qué hacer si el tuyo expiró", "pillar": "educational"},
+        {"key": "docs_proof", "topic": "Qué documentos prueban tu residencia en España", "pillar": "educational"},
+        # Educational — process
+        {"key": "vulnerability", "topic": "La cláusula de vulnerabilidad explicada", "pillar": "educational"},
+        {"key": "compare_2005", "topic": "2005 vs 2026: qué cambió", "pillar": "educational"},
+        {"key": "timeline", "topic": "Calendario de la regularización 2026", "pillar": "educational"},
+        {"key": "cost", "topic": "Cuánto cuesta regularizarse realmente", "pillar": "educational"},
+        {"key": "digital", "topic": "Todo se hace digital en 2026", "pillar": "educational"},
+        {"key": "first_steps", "topic": "Los 3 primeros pasos para prepararte hoy", "pillar": "educational"},
+        {"key": "scams", "topic": "Cómo detectar estafas de regularización", "pillar": "educational"},
+        {"key": "pricing", "topic": "Todo por menos de 250 euros", "pillar": "educational"},
+        {"key": "rights", "topic": "Tus derechos durante el proceso", "pillar": "educational"},
+        # Educational — FAQs
+        {"key": "fear_deportation", "topic": "¿Me pueden deportar si inicio el trámite?", "pillar": "educational"},
+        {"key": "family", "topic": "Regularización y reunificación familiar", "pillar": "educational"},
+        {"key": "work_permit", "topic": "Permiso de trabajo: qué cambia con los papeles", "pillar": "educational"},
+        {"key": "faq_children", "topic": "¿Mis hijos también se regularizan?", "pillar": "educational"},
+        {"key": "faq_criminal", "topic": "¿Antecedentes penales me descalifican?", "pillar": "educational"},
+        {"key": "faq_years", "topic": "¿Cuántos años necesito en España?", "pillar": "educational"},
+        # Emotional
+        {"key": "emotional_fear", "topic": "Sabemos que tienes miedo. Es normal.", "pillar": "emotional"},
+        {"key": "emotional_hope", "topic": "Imagina tu vida con papeles", "pillar": "emotional"},
+        {"key": "emotional_family", "topic": "Volver a ver a tu familia sin miedo", "pillar": "emotional"},
+        {"key": "emotional_work", "topic": "Trabajar sin miedo: lo que cambia con papeles", "pillar": "emotional"},
+        {"key": "emotional_dignity", "topic": "Vivir con dignidad: tu vida después de regularizarte", "pillar": "emotional"},
+        # News / Urgency
+        {"key": "urgency_slots", "topic": "1.000 plazas: por qué importa ser rápido", "pillar": "news"},
+        {"key": "urgency_prepare", "topic": "No esperes al BOE para prepararte", "pillar": "news"},
+        {"key": "urgency_deadline", "topic": "La fecha límite se acerca: qué debes hacer ya", "pillar": "news"},
+        {"key": "news_boe_update", "topic": "Lo último sobre el BOE y la regularización", "pillar": "news"},
+        # Social proof
+        {"key": "social_proof", "topic": "Miles de personas ya se están preparando", "pillar": "social_proof"},
+        {"key": "social_testimonial", "topic": "Historia de alguien que se preparó a tiempo", "pillar": "social_proof"},
+        {"key": "referral", "topic": "Invita a un amigo: programa de referidos", "pillar": "social_proof"},
+        # Behind the scenes
+        {"key": "behind_ai", "topic": "Cómo nuestra IA revisa tus documentos", "pillar": "behind_scenes"},
+        {"key": "behind_team", "topic": "El equipo de abogados detrás de tuspapeles2026", "pillar": "behind_scenes"},
+    ],
+    "carousel": [
+        {"key": "car_5myths", "topic": "5 mitos sobre la regularización desmentidos", "pillar": "educational"},
+        {"key": "car_docs_checklist", "topic": "Checklist: los documentos que necesitas", "pillar": "educational"},
+        {"key": "car_step_by_step", "topic": "Paso a paso: cómo iniciar tu trámite", "pillar": "educational"},
+        {"key": "car_2005_vs_2026", "topic": "Diferencias entre la regularización de 2005 y 2026", "pillar": "educational"},
+        {"key": "car_vulnerability", "topic": "La cláusula de vulnerabilidad en 6 slides", "pillar": "educational"},
+        {"key": "car_cost_compare", "topic": "Compara precios: nosotros vs la competencia", "pillar": "educational"},
+        {"key": "car_faq_top5", "topic": "Las 5 preguntas más frecuentes respondidas", "pillar": "educational"},
+        {"key": "car_digital_process", "topic": "Todo el proceso es digital: así funciona", "pillar": "educational"},
+        {"key": "car_scam_signs", "topic": "5 señales de que te están estafando", "pillar": "educational"},
+        {"key": "car_empadronamiento", "topic": "Guía visual: cómo sacar tu empadronamiento", "pillar": "educational"},
+        {"key": "car_timeline", "topic": "Calendario visual de la regularización 2026", "pillar": "news"},
+        {"key": "car_deadline", "topic": "Cuenta atrás: lo que debes hacer antes de junio", "pillar": "news"},
+        {"key": "car_imagine_life", "topic": "Imagina tu vida con papeles en 6 imágenes", "pillar": "emotional"},
+        {"key": "car_fear_to_hope", "topic": "Del miedo a la esperanza: tu camino a los papeles", "pillar": "emotional"},
+        {"key": "car_family_reunion", "topic": "Reunificación familiar: lo que significa regularizarte", "pillar": "emotional"},
+        {"key": "car_success_stories", "topic": "Historias de éxito de la regularización de 2005", "pillar": "social_proof"},
+        {"key": "car_numbers", "topic": "Los números: cuántas personas ya se preparan", "pillar": "social_proof"},
+        {"key": "car_referral", "topic": "Programa Cónsul/Embajador: invita y ahorra", "pillar": "social_proof"},
+        {"key": "car_ai_works", "topic": "Así funciona nuestra IA de validación de documentos", "pillar": "behind_scenes"},
+        {"key": "car_rights", "topic": "Tus derechos durante el proceso de regularización", "pillar": "educational"},
+    ],
+    "whatsapp": [
+        {"key": "wa_news_boe", "topic": "type: news — últimas novedades sobre el BOE", "pillar": "news"},
+        {"key": "wa_news_update", "topic": "type: news — actualización del proceso de regularización", "pillar": "news"},
+        {"key": "wa_deadline_reminder", "topic": "type: deadline — recordatorio de fecha límite", "pillar": "news"},
+        {"key": "wa_deadline_countdown", "topic": "type: deadline — cuenta atrás para junio 2026", "pillar": "news"},
+        {"key": "wa_edu_docs", "topic": "type: educational — prepara tus documentos ahora", "pillar": "educational"},
+        {"key": "wa_edu_vulnerability", "topic": "type: educational — no necesitas contrato de trabajo", "pillar": "educational"},
+        {"key": "wa_edu_process", "topic": "type: educational — el proceso paso a paso", "pillar": "educational"},
+        {"key": "wa_edu_cost", "topic": "type: educational — cuánto cuesta realmente", "pillar": "educational"},
+        {"key": "wa_edu_scams", "topic": "type: educational — cómo evitar estafas", "pillar": "educational"},
+        {"key": "wa_referral_invite", "topic": "type: referral — invita a un amigo y ahorra €25", "pillar": "social_proof"},
+        {"key": "wa_referral_consul", "topic": "type: referral — conviértete en Cónsul y gana más", "pillar": "social_proof"},
+        {"key": "wa_reengage_quiet", "topic": "type: re-engagement — hace tiempo que no sabemos de ti", "pillar": "emotional"},
+        {"key": "wa_reengage_ready", "topic": "type: re-engagement — ¿ya tienes tus documentos listos?", "pillar": "emotional"},
+        {"key": "wa_emotional_hope", "topic": "type: educational — imagina poder viajar a ver a tu familia", "pillar": "emotional"},
+        {"key": "wa_social_proof", "topic": "type: news — miles de personas ya se están preparando", "pillar": "social_proof"},
+    ],
+    "fbpost": [
+        {"key": "fb_myth_job", "topic": "Desmintiendo el mito del contrato de trabajo", "pillar": "educational"},
+        {"key": "fb_docs_guide", "topic": "Guía: qué documentos necesitas para la regularización", "pillar": "educational"},
+        {"key": "fb_vulnerability", "topic": "La cláusula de vulnerabilidad explicada para todos", "pillar": "educational"},
+        {"key": "fb_empadronamiento", "topic": "Cómo conseguir tu empadronamiento paso a paso", "pillar": "educational"},
+        {"key": "fb_antecedentes", "topic": "Certificado de antecedentes: guía completa", "pillar": "educational"},
+        {"key": "fb_cost_truth", "topic": "La verdad sobre los costes de regularización", "pillar": "educational"},
+        {"key": "fb_scams_warning", "topic": "Cuidado con las estafas de regularización", "pillar": "educational"},
+        {"key": "fb_faq_children", "topic": "Pregunta frecuente: ¿mis hijos se regularizan también?", "pillar": "educational"},
+        {"key": "fb_faq_years", "topic": "¿Cuántos años necesitas llevar en España?", "pillar": "educational"},
+        {"key": "fb_digital_2026", "topic": "En 2026 todo es digital: lo que necesitas saber", "pillar": "educational"},
+        {"key": "fb_2005_vs_2026", "topic": "Lo que aprendimos de la regularización de 2005", "pillar": "educational"},
+        {"key": "fb_rights", "topic": "Tus derechos como inmigrante durante el trámite", "pillar": "educational"},
+        {"key": "fb_timeline", "topic": "Calendario de la regularización: fechas clave", "pillar": "news"},
+        {"key": "fb_urgency", "topic": "Por qué prepararte ahora y no esperar al BOE", "pillar": "news"},
+        {"key": "fb_hope", "topic": "Un mensaje de esperanza para quien tiene miedo", "pillar": "emotional"},
+        {"key": "fb_family", "topic": "Regularización y familia: lo que significa tener papeles", "pillar": "emotional"},
+        {"key": "fb_fear_normal", "topic": "Es normal tener miedo. Así te ayudamos.", "pillar": "emotional"},
+        {"key": "fb_social_thousands", "topic": "Miles de personas ya se preparan: únete", "pillar": "social_proof"},
+        {"key": "fb_referral", "topic": "Ayuda a tu comunidad: programa de referidos", "pillar": "social_proof"},
+        {"key": "fb_behind_team", "topic": "Conoce al equipo de abogados de Pombo & Horowitz", "pillar": "behind_scenes"},
+    ],
+    "caption": [
+        {"key": "cap_myth_job", "topic": "for instagram — mito del contrato de trabajo", "pillar": "educational"},
+        {"key": "cap_vulnerability", "topic": "for instagram — cláusula de vulnerabilidad", "pillar": "educational"},
+        {"key": "cap_docs_ready", "topic": "for instagram — prepara tus documentos", "pillar": "educational"},
+        {"key": "cap_cost", "topic": "for facebook — precio real de regularizarse", "pillar": "educational"},
+        {"key": "cap_digital", "topic": "for instagram — todo es digital en 2026", "pillar": "educational"},
+        {"key": "cap_scams", "topic": "for facebook — cómo detectar estafas", "pillar": "educational"},
+        {"key": "cap_first_steps", "topic": "for instagram — 3 pasos para empezar hoy", "pillar": "educational"},
+        {"key": "cap_faq_children", "topic": "for facebook — ¿mis hijos se regularizan?", "pillar": "educational"},
+        {"key": "cap_faq_years", "topic": "for instagram — años necesarios en España", "pillar": "educational"},
+        {"key": "cap_2005_lesson", "topic": "for facebook — lecciones de 2005", "pillar": "educational"},
+        {"key": "cap_hope", "topic": "for instagram — imagina tu vida con papeles", "pillar": "emotional"},
+        {"key": "cap_fear", "topic": "for instagram — sabemos que tienes miedo", "pillar": "emotional"},
+        {"key": "cap_family", "topic": "for facebook — volver a ver a tu familia", "pillar": "emotional"},
+        {"key": "cap_dignity", "topic": "for instagram — vivir con dignidad", "pillar": "emotional"},
+        {"key": "cap_timeline", "topic": "for facebook — fechas clave de la regularización", "pillar": "news"},
+        {"key": "cap_deadline", "topic": "for instagram — la cuenta atrás ha empezado", "pillar": "news"},
+        {"key": "cap_boe_update", "topic": "for facebook — novedades sobre el BOE", "pillar": "news"},
+        {"key": "cap_social_proof", "topic": "for instagram — miles ya se preparan", "pillar": "social_proof"},
+        {"key": "cap_referral", "topic": "for facebook — programa de referidos", "pillar": "social_proof"},
+        {"key": "cap_behind_ai", "topic": "for instagram — nuestra IA de validación", "pillar": "behind_scenes"},
+    ],
+    "story": [
+        {"key": "st_poll_myth", "topic": "type: poll — ¿verdad o mito? sobre la regularización", "pillar": "educational"},
+        {"key": "st_poll_ready", "topic": "type: poll — ¿ya tienes tu empadronamiento?", "pillar": "educational"},
+        {"key": "st_poll_docs", "topic": "type: poll — ¿qué documento te falta?", "pillar": "educational"},
+        {"key": "st_quiz_cost", "topic": "type: quiz — ¿cuánto cuesta regularizarse?", "pillar": "educational"},
+        {"key": "st_quiz_req", "topic": "type: quiz — ¿conoces los requisitos?", "pillar": "educational"},
+        {"key": "st_quiz_2005", "topic": "type: quiz — ¿qué sabes de la regularización de 2005?", "pillar": "educational"},
+        {"key": "st_tip_docs", "topic": "type: tip — consejo rápido sobre documentos", "pillar": "educational"},
+        {"key": "st_tip_scams", "topic": "type: tip — cómo detectar una estafa", "pillar": "educational"},
+        {"key": "st_tip_empad", "topic": "type: tip — consejo sobre empadronamiento", "pillar": "educational"},
+        {"key": "st_question_fear", "topic": "type: question — ¿cuál es tu mayor miedo?", "pillar": "emotional"},
+        {"key": "st_question_dream", "topic": "type: question — ¿qué harías primero con papeles?", "pillar": "emotional"},
+        {"key": "st_question_family", "topic": "type: question — ¿a quién verías primero?", "pillar": "emotional"},
+        {"key": "st_countdown_boe", "topic": "type: countdown — cuenta atrás para el BOE", "pillar": "news"},
+        {"key": "st_countdown_deadline", "topic": "type: countdown — días hasta la fecha límite", "pillar": "news"},
+        {"key": "st_tip_referral", "topic": "type: tip — invita a un amigo y ahorra", "pillar": "social_proof"},
+        {"key": "st_poll_ai", "topic": "type: poll — ¿usarías IA para revisar tus documentos?", "pillar": "behind_scenes"},
+    ],
+    "blog": [
+        {"key": "blog_vulnerability", "topic": "Cláusula de vulnerabilidad: qué es y por qué es importante", "pillar": "educational"},
+        {"key": "blog_docs_complete", "topic": "Guía completa de documentos para la regularización 2026", "pillar": "educational"},
+        {"key": "blog_empadronamiento", "topic": "Cómo conseguir tu empadronamiento paso a paso", "pillar": "educational"},
+        {"key": "blog_antecedentes", "topic": "Certificado de antecedentes penales: guía completa", "pillar": "educational"},
+        {"key": "blog_myths_5", "topic": "5 mitos peligrosos sobre la regularización 2026", "pillar": "educational"},
+        {"key": "blog_2005_vs_2026", "topic": "Regularización 2005 vs 2026: todas las diferencias", "pillar": "educational"},
+        {"key": "blog_cost_guide", "topic": "Cuánto cuesta regularizarse en España en 2026", "pillar": "educational"},
+        {"key": "blog_scams", "topic": "Cómo detectar y evitar estafas de regularización", "pillar": "educational"},
+        {"key": "blog_faq", "topic": "Las 10 preguntas más frecuentes sobre la regularización", "pillar": "educational"},
+        {"key": "blog_digital", "topic": "Regularización digital: cómo funciona el trámite online", "pillar": "educational"},
+        {"key": "blog_children", "topic": "Regularización y menores: qué pasa con tus hijos", "pillar": "educational"},
+        {"key": "blog_work_permit", "topic": "Del permiso de trabajo a la vida laboral: todo lo que cambia", "pillar": "educational"},
+        {"key": "blog_rights", "topic": "Tus derechos como inmigrante durante el proceso", "pillar": "educational"},
+        {"key": "blog_first_steps", "topic": "Los primeros pasos para preparar tu regularización", "pillar": "educational"},
+        {"key": "blog_timeline", "topic": "Calendario de la regularización 2026: todas las fechas", "pillar": "news"},
+        {"key": "blog_boe_explained", "topic": "Qué es el BOE y por qué importa para tu regularización", "pillar": "news"},
+        {"key": "blog_hope", "topic": "Un futuro con papeles: historias de esperanza", "pillar": "emotional"},
+        {"key": "blog_family", "topic": "Regularización y familia: reunificación familiar explicada", "pillar": "emotional"},
+        {"key": "blog_2005_stories", "topic": "Historias de la regularización de 2005: lecciones para hoy", "pillar": "social_proof"},
+        {"key": "blog_ai_validation", "topic": "Cómo la inteligencia artificial valida tus documentos", "pillar": "behind_scenes"},
+    ],
+}
+
+# Track recently used topics per content type (max 10, prevents repeats)
+RECENT_TOPICS: dict[str, deque] = {
+    ctype: deque(maxlen=10) for ctype in TOPIC_POOL
+}
+
+# Pillar distribution for /weekly (40% edu, 25% emotional, 20% news, 10% proof, 5% behind)
+WEEKLY_PILLAR_WEIGHTS = {
+    "educational": 0.40,
+    "emotional": 0.25,
+    "news": 0.20,
+    "social_proof": 0.10,
+    "behind_scenes": 0.05,
+}
+
+
+def pick_topic(content_type: str) -> str:
+    """Pick a single non-recent topic from the pool for this content type."""
+    pool = TOPIC_POOL.get(content_type, [])
+    if not pool:
+        return ""
+
+    recent = RECENT_TOPICS.get(content_type, deque(maxlen=10))
+    available = [t for t in pool if t["key"] not in recent]
+    if not available:
+        recent.clear()
+        available = pool
+
+    chosen = random.choice(available)
+    recent.append(chosen["key"])
+    return chosen["topic"]
+
+
+def pick_topics_batch(content_type: str, count: int) -> list[str]:
+    """Pick multiple unique non-recent topics from the pool."""
+    pool = TOPIC_POOL.get(content_type, [])
+    if not pool:
+        return [""] * count
+
+    recent = RECENT_TOPICS.get(content_type, deque(maxlen=10))
+    available = [t for t in pool if t["key"] not in recent]
+    if len(available) < count:
+        recent.clear()
+        available = list(pool)
+
+    selected = random.sample(available, min(count, len(available)))
+    topics = []
+    for t in selected:
+        topics.append(t["topic"])
+        recent.append(t["key"])
+
+    while len(topics) < count:
+        topics.append("")
+    return topics
+
+
+def pick_topics_weekly(content_type: str, count: int) -> list[str]:
+    """Pick topics for /weekly with pillar distribution."""
+    pool = TOPIC_POOL.get(content_type, [])
+    if not pool:
+        return [""] * count
+
+    recent = RECENT_TOPICS.get(content_type, deque(maxlen=10))
+    recent.clear()  # Reset for weekly to maximize variety
+
+    # Calculate how many from each pillar
+    pillar_counts = {}
+    assigned = 0
+    pillars = list(WEEKLY_PILLAR_WEIGHTS.items())
+    for pillar, weight in pillars:
+        n = round(count * weight)
+        pillar_counts[pillar] = n
+        assigned += n
+    # Distribute rounding remainder to educational
+    if assigned < count:
+        pillar_counts["educational"] += count - assigned
+    elif assigned > count:
+        pillar_counts["educational"] -= assigned - count
+
+    topics = []
+    for pillar, n in pillar_counts.items():
+        if n <= 0:
+            continue
+        pillar_pool = [t for t in pool if t["pillar"] == pillar]
+        if not pillar_pool:
+            pillar_pool = pool
+        chosen = random.sample(pillar_pool, min(n, len(pillar_pool)))
+        for t in chosen:
+            topics.append(t["topic"])
+            recent.append(t["key"])
+        # Fill shortfall from any pillar
+        while len(topics) < sum(
+            v for k, v in pillar_counts.items() if list(pillar_counts.keys()).index(k) <= list(pillar_counts.keys()).index(pillar)
+        ):
+            fallback = [t for t in pool if t["key"] not in recent]
+            if not fallback:
+                break
+            extra = random.choice(fallback)
+            topics.append(extra["topic"])
+            recent.append(extra["key"])
+
+    random.shuffle(topics)
+    while len(topics) < count:
+        topics.append("")
+    return topics[:count]
 
 
 # ==============================================================================
@@ -253,6 +550,19 @@ COMPETITORS (differentiate naturally, never attack):
         "tiktok": (
             "\nCONTENT TYPE: TIKTOK SCRIPT\n"
             "Write a TikTok script for 15-60 seconds.\n\n"
+            "After the main JSON fields, also include a field called 'invideo_prompt' — "
+            "this is a ready-to-paste prompt for InVideo AI's Script-to-Video tool. The prompt must:\n"
+            "- Start with 'Create a [duration]-second vertical TikTok video in Spanish'\n"
+            "- Include the full script as the voiceover text\n"
+            "- Specify 'warm Latin American Spanish female voice'\n"
+            "- Describe the text overlays with colors (red for myths/problems, green for solutions/reality)\n"
+            "- Describe the visual style: 'professional stock footage of Spanish streets, documents on desks, "
+            "government buildings, people looking hopeful, immigrant communities'\n"
+            "- Request 'word-by-word animated captions in bold white with black outline'\n"
+            "- Request 'subtle dramatic background music, low volume'\n"
+            "- End with 'Format: 9:16 vertical for TikTok. Style: professional, warm, trustworthy.'\n"
+            "The invideo_prompt should be a single string ready to paste directly into InVideo AI "
+            "with zero editing needed.\n\n"
             "IMPORTANT: Return ONLY valid JSON with this exact structure:\n"
             '{"format": "face-to-camera|green-screen|pov|story-time|myth-vs-reality|quick-tips", '
             '"duration_seconds": number, '
@@ -260,7 +570,8 @@ COMPETITORS (differentiate naturally, never attack):
             '"script": "string (full spoken text)", '
             '"text_overlays": ["string", "string", "string"], '
             '"hashtags": "string", '
-            '"production_tip": "string"}'
+            '"production_tip": "string", '
+            '"invideo_prompt": "string (full ready-to-paste InVideo AI prompt)"}'
         ),
         "carousel": (
             "\nCONTENT TYPE: INSTAGRAM CAROUSEL\n"
@@ -646,6 +957,16 @@ def format_tiktok_for_telegram(data: dict) -> str:
         f"  {i + 1}. {escape_md(o)}" for i, o in enumerate(overlays)
     )
 
+    invideo = data.get("invideo_prompt", "")
+    invideo_section = ""
+    if invideo:
+        invideo_section = (
+            f"\n\n🎬 *INVIDEO PROMPT (paste into invideo.io):*\n"
+            f"───────────────────\n"
+            f"{escape_md(invideo)}\n"
+            f"───────────────────"
+        )
+
     return (
         f"🎬 *TIKTOK SCRIPT*\n\n"
         f"*Format:* {escape_md(data.get('format', 'face-to-camera'))}\n"
@@ -655,6 +976,7 @@ def format_tiktok_for_telegram(data: dict) -> str:
         f"📱 *TEXT OVERLAYS:*\n{overlays_text}\n\n"
         f"#️⃣ {escape_md(data.get('hashtags', ''))}\n\n"
         f"💡 *TIP:* {escape_md(data.get('production_tip', ''))}"
+        f"{invideo_section}"
     )
 
 
@@ -987,6 +1309,8 @@ async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /tiktok [topic] command."""
     topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        topic = pick_topic("tiktok")
     wait_msg = await update.message.reply_text("⏳ Generating TikTok script...")
     try:
         data = await generate_content("tiktok", topic)
@@ -1001,6 +1325,8 @@ async def cmd_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /carousel [topic] command."""
     topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        topic = pick_topic("carousel")
     wait_msg = await update.message.reply_text("⏳ Generating carousel...")
     try:
         data = await generate_content("carousel", topic)
@@ -1027,6 +1353,8 @@ async def cmd_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(topic_parts)
     if platform:
         topic = f"for {platform}. {topic}" if topic else f"for {platform}"
+    if not topic:
+        topic = pick_topic("caption")
 
     wait_msg = await update.message.reply_text("⏳ Generating caption...")
     try:
@@ -1048,6 +1376,8 @@ async def cmd_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         topic = f"type: {msg_type}"
     elif msg_type:
         topic = msg_type
+    if not topic:
+        topic = pick_topic("whatsapp")
 
     wait_msg = await update.message.reply_text("⏳ Generating WhatsApp message...")
     try:
@@ -1063,6 +1393,8 @@ async def cmd_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_fbpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /fbpost [topic] command."""
     topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        topic = pick_topic("fbpost")
     wait_msg = await update.message.reply_text("⏳ Generating Facebook post...")
     try:
         data = await generate_content("fbpost", topic)
@@ -1083,6 +1415,8 @@ async def cmd_story(update: Update, context: ContextTypes.DEFAULT_TYPE):
         topic = f"type: {story_type}"
     elif story_type:
         topic = story_type
+    if not topic:
+        topic = pick_topic("story")
 
     wait_msg = await update.message.reply_text("⏳ Generating Story concept...")
     try:
@@ -1182,64 +1516,42 @@ async def _batch_generate(
 @team_only
 async def cmd_tiktok5(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /tiktok5 — generate 5 TikTok scripts."""
-    await _batch_generate(update, context, "tiktok", 5)
+    topics = pick_topics_batch("tiktok", 5)
+    await _batch_generate(update, context, "tiktok", 5, topics)
 
 
 @team_only
 async def cmd_carousel3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /carousel3 — generate 3 carousel sets."""
-    await _batch_generate(update, context, "carousel", 3)
+    topics = pick_topics_batch("carousel", 3)
+    await _batch_generate(update, context, "carousel", 3, topics)
 
 
 @team_only
 async def cmd_captions10(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /captions10 — generate 10 captions."""
-    topics = [
-        "for instagram about eligibility",
-        "for facebook about documents needed",
-        "for instagram about the process",
-        "for facebook about pricing",
-        "for instagram about vulnerability clause",
-        "for facebook about referral program",
-        "for instagram about deadline",
-        "for facebook about AI document validation",
-        "for instagram about success stories",
-        "for facebook about getting started",
-    ]
+    topics = pick_topics_batch("caption", 10)
     await _batch_generate(update, context, "caption", 10, topics)
 
 
 @team_only
 async def cmd_whatsapp5(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /whatsapp5 — generate 5 WhatsApp messages."""
-    topics = [
-        "type: news",
-        "type: deadline",
-        "type: educational",
-        "type: referral",
-        "type: re-engagement",
-    ]
+    topics = pick_topics_batch("whatsapp", 5)
     await _batch_generate(update, context, "whatsapp", 5, topics)
 
 
 @team_only
 async def cmd_fbpost5(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /fbpost5 — generate 5 Facebook posts."""
-    await _batch_generate(update, context, "fbpost", 5)
+    topics = pick_topics_batch("fbpost", 5)
+    await _batch_generate(update, context, "fbpost", 5, topics)
 
 
 @team_only
 async def cmd_stories7(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stories7 — generate 7 Story concepts."""
-    topics = [
-        "type: poll",
-        "type: question",
-        "type: countdown",
-        "type: quiz",
-        "type: tip",
-        "type: poll",
-        "type: question",
-    ]
+    topics = pick_topics_batch("story", 7)
     await _batch_generate(update, context, "story", 7, topics)
 
 
@@ -1285,49 +1597,39 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     total = 0
 
-    # 7 TikTok scripts
+    # 7 TikTok scripts (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 1/7: TikTok scripts*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "tiktok", 7)
+    count = await _batch_generate(update, context, "tiktok", 7, pick_topics_weekly("tiktok", 7))
     total += count
 
-    # 5 Carousel sets
+    # 5 Carousel sets (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 2/7: Carousels*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "carousel", 5)
+    count = await _batch_generate(update, context, "carousel", 5, pick_topics_weekly("carousel", 5))
     total += count
 
-    # 14 Stories
-    story_topics = ["type: poll", "type: question", "type: countdown", "type: quiz",
-                     "type: tip", "type: poll", "type: question", "type: countdown",
-                     "type: quiz", "type: tip", "type: poll", "type: question",
-                     "type: countdown", "type: tip"]
+    # 14 Stories (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 3/7: Stories*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "story", 14, story_topics)
+    count = await _batch_generate(update, context, "story", 14, pick_topics_weekly("story", 14))
     total += count
 
-    # 3 WhatsApp messages
-    wa_topics = ["type: news", "type: educational", "type: referral"]
+    # 3 WhatsApp messages (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 4/7: WhatsApp*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "whatsapp", 3, wa_topics)
+    count = await _batch_generate(update, context, "whatsapp", 3, pick_topics_weekly("whatsapp", 3))
     total += count
 
-    # 5 Facebook posts
+    # 5 Facebook posts (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 5/7: Facebook posts*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "fbpost", 5)
+    count = await _batch_generate(update, context, "fbpost", 5, pick_topics_weekly("fbpost", 5))
     total += count
 
-    # 2 Blog articles
+    # 2 Blog articles (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 6/7: Blog articles*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "blog", 2)
+    count = await _batch_generate(update, context, "blog", 2, pick_topics_weekly("blog", 2))
     total += count
 
-    # 10 Captions
-    caption_topics = [
-        "for instagram", "for facebook", "for instagram", "for facebook",
-        "for instagram", "for facebook", "for instagram", "for facebook",
-        "for instagram", "for facebook",
-    ]
+    # 10 Captions (pillar-distributed)
     await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 7/7: Captions*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "caption", 10, caption_topics)
+    count = await _batch_generate(update, context, "caption", 10, pick_topics_weekly("caption", 10))
     total += count
 
     await context.bot.send_message(
