@@ -11,6 +11,10 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.7 (2026-02-17)
+  - FIX: /delete crash — httpx delete() doesn't support json kwarg, use request() instead
+  - FIX: Same-day article sorting — add published_at ISO timestamp, sort by it
+
 v3.0.6 (2026-02-17)
   - ADD: /articles command — list all published articles from blog/index.json
   - ADD: /delete command — remove articles via numbered list or slug, with confirmation
@@ -79,7 +83,7 @@ import random
 import hashlib
 import base64
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from typing import Optional
 from functools import wraps
@@ -879,6 +883,7 @@ async def update_blog_index(
             "title": title,
             "meta": meta,
             "date": date_override or datetime.now().strftime("%Y-%m-%d"),
+            "published_at": date_override or datetime.now(timezone.utc).isoformat(),
             "reading_time": f"{max(1, word_count // 200)} min",
             "category": category,
             "image": None,
@@ -889,9 +894,10 @@ async def update_blog_index(
             a for a in current_content["articles"] if a.get("slug") != slug
         ]
         current_content["articles"].append(new_entry)
-        # Sort by date descending (newest first)
+        # Sort by published_at descending (falls back to date for old articles)
         current_content["articles"].sort(
-            key=lambda a: a.get("date", ""), reverse=True
+            key=lambda a: a.get("published_at", a.get("date", "")),
+            reverse=True,
         )
 
         # Push updated index.json
@@ -2370,8 +2376,8 @@ async def delete_github_file(repo: str, path: str, commit_msg: str) -> bool:
             return False
         sha = resp.json().get("sha")
 
-        # Delete
-        resp = await client.delete(url, headers=headers, json={
+        # Delete (use request() because delete() doesn't support json kwarg)
+        resp = await client.request("DELETE", url, headers=headers, json={
             "message": commit_msg,
             "sha": sha,
             "branch": "main",
