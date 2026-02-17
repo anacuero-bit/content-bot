@@ -1,0 +1,25 @@
+name: Auto Update Site
+
+on:
+  schedule:
+    - cron: '0 6,14,22 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install feedparser beautifulsoup4 anthropic requests apscheduler
+
+      - run: python auto_update.py --once
+        env:
+          GITHUB_TOKEN: ${{ secrets.SITE_PUSH_TOKEN }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TEAM_CHAT_IDS: ${{ secrets.TEAM_CHAT_IDS }}
