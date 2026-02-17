@@ -1,25 +1,30 @@
-name: Auto Update Site
+name: Auto-Update News
 
 on:
   schedule:
+    # Run every 8 hours: 6am, 2pm, 10pm UTC
     - cron: '0 6,14,22 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Manual trigger
 
 jobs:
-  update:
+  auto-update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - run: pip install feedparser beautifulsoup4 anthropic requests apscheduler
+      - name: Install dependencies
+        run: pip install httpx feedparser
 
-      - run: python auto_update.py --once
+      - name: Run auto-updater
         env:
           GITHUB_TOKEN: ${{ secrets.SITE_PUSH_TOKEN }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TEAM_CHAT_IDS: ${{ secrets.TEAM_CHAT_IDS }}
+          GITHUB_REPO_TP: anacuero-bit/tus-papeles-2026
+        run: python auto_update.py
