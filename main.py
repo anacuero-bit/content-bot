@@ -568,10 +568,20 @@ NEVER SAY:
         ),
         "tiktok": (
             "\nCONTENT TYPE: TIKTOK SCRIPT\n"
-            "Write a TikTok script for 15-60 seconds.\n\n"
+            "Write a TikTok script for 15-30 seconds.\n\n"
+            "TARGET DURATION: 20-30 seconds (25 seconds ideal).\n"
+            "SCRIPT LENGTH: Maximum 75 words of spoken text. Fewer is better.\n"
+            "PACING: Hook in first 2 seconds. One clear idea per video. No rambling.\n\n"
+            "Duration by format:\n"
+            "- Myth-busting: 15-20 seconds (~40-50 words)\n"
+            "- Document tip: 20-25 seconds (~50-60 words)\n"
+            "- Educational explainer: 25-30 seconds (~60-75 words)\n"
+            "- Emotional/story: 30 seconds max (~75 words)\n\n"
+            "NEVER exceed 30 seconds or 75 words. Shorter = higher completion rate = more views.\n\n"
             "After the main JSON fields, also include a field called 'invideo_prompt' — "
             "this is a ready-to-paste prompt for InVideo AI. The prompt MUST follow this exact format:\n\n"
-            "Create a [DURATION]-second vertical TikTok video in European Spanish (Spain).\n\n"
+            "Create a [DURATION]-second vertical TikTok video in European Spanish (Spain). "
+            "(DURATION must be 15-30 seconds, never more.)\n\n"
             "VOICEOVER SCRIPT: \"[paste the full script here]\"\n\n"
             "VOICE: Female, European Spanish (Castilian accent). Warm, measured pace — not fast. "
             "Trusted professional tone.\n\n"
@@ -583,14 +593,14 @@ NEVER SAY:
             "CAPTIONS: Word-by-word animated captions, bold white with black outline, bottom third of screen.\n\n"
             "MUSIC: Subtle documentary-style background music, 15% volume.\n\n"
             "FORMAT: 9:16 vertical, 1080x1920. Style: professional, warm, trustworthy. "
-            "Fast-paced cuts every 3-5 seconds.\n\n"
+            "Fast-paced cuts every 3-5 seconds. Total duration: 15-30 seconds MAX.\n\n"
             "The invideo_prompt should be a single string ready to paste directly into InVideo AI "
             "with zero editing needed.\n\n"
             "IMPORTANT: Return ONLY valid JSON with this exact structure:\n"
             '{"format": "face-to-camera|green-screen|pov|story-time|myth-vs-reality|quick-tips", '
-            '"duration_seconds": number, '
+            '"duration_seconds": number (15-30, never above 30), '
             '"hook": "string (first 2 seconds — must grab attention)", '
-            '"script": "string (full spoken text)", '
+            '"script": "string (full spoken text — max 75 words)", '
             '"text_overlays": ["string", "string", "string"], '
             '"hashtags": "string", '
             '"production_tip": "string", '
@@ -1157,7 +1167,7 @@ def format_tiktok_for_telegram(data: dict) -> str:
     return (
         f"🎬 *TIKTOK SCRIPT*\n\n"
         f"*Format:* {escape_md(data.get('format', 'face-to-camera'))}\n"
-        f"*Duration:* ~{data.get('duration_seconds', 30)}s\n\n"
+        f"*Duration:* ~{data.get('duration_seconds', 25)}s\n\n"
         f"🎯 *HOOK (first 2 sec):*\n\"{escape_md(data.get('hook', ''))}\"\n\n"
         f"📝 *SCRIPT:*\n\"{escape_md(data.get('script', ''))}\"\n\n"
         f"📱 *TEXT OVERLAYS:*\n{overlays_text}\n\n"
