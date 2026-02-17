@@ -11,6 +11,15 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.5 (2026-02-17)
+  - ADD: /backfill command — generates and publishes 7 backdated launch articles
+    to tuspapeles2026 repo (Jan 27 – Feb 17 timeline) via Claude API + GitHub API
+  - ADD: Multi-source /news — fetches from Google News RSS, La Moncloa, BOE
+    with web scraping via BeautifulSoup; shows action buttons per article
+  - ADD: beautifulsoup4 dependency for web scraping news sources
+  - FIX: update_blog_index supports date_override for historical dates
+  - FIX: index.json sorted by date descending (newest first)
+
 v3.0.4 (2026-02-17)
   - FIX: Blog publish now updates blog/index.json (noticias listing page)
   - FIX: Legal facts block injected into system prompt (5 MONTHS not years)
@@ -822,6 +831,7 @@ def detect_blog_category(title: str, topic: str = "") -> str:
 async def update_blog_index(
     repo: str, slug: str, title: str, meta: str,
     html_content: str, category: str = "guia",
+    date_override: str = None,
 ) -> bool:
     """Fetch blog/index.json, add new article entry, push updated JSON."""
     if not GITHUB_TOKEN:
@@ -852,17 +862,21 @@ async def update_blog_index(
             "slug": slug,
             "title": title,
             "meta": meta,
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": date_override or datetime.now().strftime("%Y-%m-%d"),
             "reading_time": f"{max(1, word_count // 200)} min",
             "category": category,
             "image": None,
         }
 
-        # Remove duplicate slugs, insert newest first
+        # Remove duplicate slugs
         current_content["articles"] = [
             a for a in current_content["articles"] if a.get("slug") != slug
         ]
-        current_content["articles"].insert(0, new_entry)
+        current_content["articles"].append(new_entry)
+        # Sort by date descending (newest first)
+        current_content["articles"].sort(
+            key=lambda a: a.get("date", ""), reverse=True
+        )
 
         # Push updated index.json
         updated_json = json.dumps(current_content, ensure_ascii=False, indent=2)
@@ -990,38 +1004,93 @@ def wrap_blog_html(
 
 
 # ==============================================================================
-# NEWS FETCHING
+# NEWS FETCHING (multi-source: RSS + web scraping)
 # ==============================================================================
+
+NEWS_SOURCES = [
+    {
+        "name": "Google News - regularización",
+        "type": "rss",
+        "url": "https://news.google.com/rss/search?q=regularizaci%C3%B3n+extraordinaria+2026+Espa%C3%B1a&hl=es&gl=ES&ceid=ES:es",
+        "keywords": [],
+    },
+    {
+        "name": "Google News - decreto",
+        "type": "rss",
+        "url": "https://news.google.com/rss/search?q=decreto+regularizaci%C3%B3n+migrantes+Espa%C3%B1a+2026&hl=es&gl=ES&ceid=ES:es",
+        "keywords": [],
+    },
+    {
+        "name": "La Moncloa - Inclusión",
+        "type": "web",
+        "url": "https://www.lamoncloa.gob.es/serviciosdeprensa/notasprensa/inclusion/Paginas/index.aspx",
+        "keywords": ["regularización", "extranjeros", "migrantes", "extranjería"],
+    },
+    {
+        "name": "BOE",
+        "type": "web",
+        "url": "https://www.boe.es/diario_boe/",
+        "keywords": ["extranjería", "regularización", "reglamento"],
+    },
+]
 
 
 async def fetch_news() -> list:
-    """Fetch latest regularización news from Google News RSS."""
-    queries = [
-        "regularización+extraordinaria+España+2026",
-        "regularización+masiva+inmigrantes+España",
-        "papeles+España+2026",
-    ]
+    """Fetch latest regularización news from RSS feeds and web sources."""
     articles = []
 
-    for q in queries:
-        url = f"https://news.google.com/rss/search?q={q}&hl=es&gl=ES&ceid=ES:es"
+    for source in NEWS_SOURCES:
         try:
-            feed = await asyncio.to_thread(feedparser.parse, url)
-            for entry in feed.entries[:3]:
-                source_title = "Desconocido"
-                if hasattr(entry, "source") and hasattr(entry.source, "title"):
-                    source_title = entry.source.title
-
-                articles.append(
-                    {
+            if source["type"] == "rss":
+                feed = await asyncio.to_thread(feedparser.parse, source["url"])
+                for entry in feed.entries[:5]:
+                    source_title = source["name"]
+                    if hasattr(entry, "source") and hasattr(entry.source, "title"):
+                        source_title = entry.source.title
+                    articles.append({
                         "title": entry.title,
                         "link": entry.link,
                         "source": source_title,
                         "published": getattr(entry, "published", ""),
-                    }
-                )
+                        "summary": getattr(entry, "summary", "")[:200],
+                    })
+
+            elif source["type"] == "web":
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        source["url"],
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        follow_redirects=True,
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        for link in soup.find_all("a", href=True):
+                            text = link.get_text().strip()
+                            text_lower = text.lower()
+                            if len(text) < 15:
+                                continue
+                            if any(kw in text_lower for kw in source["keywords"]):
+                                href = link["href"]
+                                if not href.startswith("http"):
+                                    # Resolve relative URL
+                                    from urllib.parse import urljoin
+                                    href = urljoin(source["url"], href)
+                                articles.append({
+                                    "title": text[:150],
+                                    "link": href,
+                                    "source": source["name"],
+                                    "published": "",
+                                    "summary": "",
+                                })
+                    except ImportError:
+                        logger.warning("beautifulsoup4 not installed, skipping web sources")
+                        break
+
         except Exception as e:
-            logger.error(f"News fetch error for query '{q}': {e}")
+            logger.error(f"News fetch error for {source['name']}: {e}")
 
     # Deduplicate by title similarity
     seen = set()
@@ -1032,7 +1101,7 @@ async def fetch_news() -> list:
             seen.add(key)
             unique.append(a)
 
-    return unique[:10]
+    return unique[:15]
 
 
 # ==============================================================================
@@ -1353,6 +1422,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /topics — 10 topic suggestions\n"
         "  /stats — Generation statistics\n"
         "  /phase \\[phase\\] — Set campaign phase\n"
+        "  /backfill — Publish 7 launch articles\n"
         "  /help — This message"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -1785,8 +1855,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @team_only
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /news — fetch and analyze regularización news."""
-    wait_msg = await update.message.reply_text("⏳ Fetching latest news...")
+    """Handle /news — fetch real news and suggest content with action buttons."""
+    wait_msg = await update.message.reply_text("⏳ Scanning news sources...")
 
     try:
         articles = await fetch_news()
@@ -1795,46 +1865,95 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wait_msg.edit_text("No recent news found. Try again later.")
             return
 
-        # Format news list
-        news_text = "📰 *LATEST REGULARIZACIÓN NEWS*\n\n"
-        for i, a in enumerate(articles, 1):
-            news_text += (
-                f"*{i}.* {escape_md(a['title'])}\n"
-                f"   Source: {escape_md(a['source'])} | {escape_md(a.get('published', ''))}\n\n"
-            )
-
         await wait_msg.delete()
-        await send_long_message(update, news_text, context)
 
-        # Ask Claude to analyze for content ideas
-        news_summary = "\n".join(
-            f"- {a['title']} ({a['source']})" for a in articles
+        # Show header
+        today = datetime.now().strftime("%d %b %Y")
+        header = f"📰 *NEWS SCAN — {today}*\n\nFound {len(articles)} relevant items:\n"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=header,
+            parse_mode=ParseMode.MARKDOWN,
         )
+
+        # Show each article with action buttons (top 8 max)
+        for i, a in enumerate(articles[:8], 1):
+            title = a["title"][:100]
+            source = a.get("source", "")
+            published = a.get("published", "")
+            summary = a.get("summary", "")
+
+            text = f"*{i}.* {escape_md(title)}\n"
+            if source:
+                text += f"   📍 {escape_md(source)}"
+            if published:
+                text += f" | {escape_md(published)}"
+            text += "\n"
+            if summary:
+                text += f"   {escape_md(summary[:120])}\n"
+
+            # Action buttons for this news item
+            topic_short = title[:40]
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        "📝 Blog", callback_data=f"news_blog_{topic_short}"
+                    ),
+                    InlineKeyboardButton(
+                        "🎬 TikTok", callback_data=f"news_tiktok_{topic_short}"
+                    ),
+                    InlineKeyboardButton(
+                        "📱 WA", callback_data=f"news_wa_{topic_short}"
+                    ),
+                ],
+            ]
+            markup = InlineKeyboardMarkup(buttons)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=markup,
+                )
+            except Exception:
+                # Fallback without markdown
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=text,
+                    reply_markup=markup,
+                )
+
+        # Ask Claude to analyze top articles for content angles
         analysis_msg = await update.message.reply_text(
-            "⏳ Analyzing for content ideas..."
+            "⏳ Analyzing for content angles..."
         )
-
         try:
+            news_summary = "\n".join(
+                f"- {a['title']} ({a.get('source', '')})" for a in articles[:8]
+            )
             data = await generate_content(
                 "news_analysis",
-                topic=f"Analyze these recent news articles:\n{news_summary}",
+                topic=f"Analyze these REAL recent news articles:\n{news_summary}",
             )
 
             analysis_items = data.get("analysis", [])
-            analysis_text = "💡 *CONTENT IDEAS FROM NEWS*\n\n"
-            for item in analysis_items:
-                analysis_text += f"📌 *{escape_md(item.get('headline', ''))}*\n"
-                analysis_text += f"{escape_md(item.get('summary', ''))}\n"
-                ideas = item.get("content_ideas", [])
-                for idea in ideas:
-                    analysis_text += f"  → {escape_md(idea)}\n"
-                analysis_text += "\n"
-
-            await analysis_msg.delete()
-            await send_long_message(update, analysis_text, context)
+            if analysis_items:
+                analysis_text = "💡 *CONTENT IDEAS FROM NEWS*\n\n"
+                for item in analysis_items:
+                    analysis_text += f"📌 *{escape_md(item.get('headline', ''))}*\n"
+                    analysis_text += f"{escape_md(item.get('summary', ''))}\n"
+                    ideas = item.get("content_ideas", [])
+                    for idea in ideas:
+                        analysis_text += f"  → {escape_md(idea)}\n"
+                    analysis_text += "\n"
+                await analysis_msg.delete()
+                await send_long_message(update, analysis_text, context)
+            else:
+                await analysis_msg.edit_text("No additional content ideas generated.")
 
         except Exception as e:
-            await analysis_msg.edit_text(f"⚠️ Could not analyze news: {e}")
+            await analysis_msg.edit_text(f"⚠️ Could not analyze: {e}")
 
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error fetching news: {e}")
@@ -1928,6 +2047,248 @@ async def cmd_phase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phase_override = new_phase
     await update.message.reply_text(
         f"Phase set to: *{phase_override}*",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+# ==============================================================================
+# BACKFILL — LAUNCH ARTICLES
+# ==============================================================================
+
+# 7 articles to backfill with their real historical dates
+BACKFILL_ARTICLES = [
+    {
+        "slug": "gobierno-aprueba-regularizacion-extraordinaria",
+        "title": "El Gobierno aprueba la tramitación de la regularización extraordinaria",
+        "date": "2026-01-27",
+        "date_str": "27 de enero de 2026",
+        "category": "noticias",
+        "meta": "El Consejo de Ministros autoriza la tramitación urgente de la regularización extraordinaria para 500.000 personas en España.",
+        "prompt": (
+            "Write a 500-word Spanish news blog article about: "
+            "El Consejo de Ministros aprueba la tramitación urgente de la regularización extraordinaria. "
+            "Include these facts: 500,000 estimated beneficiaries. April-June 2026 application window. "
+            "5 months continuous residence requirement (NOT years). Vulnerability clause means NO job offer needed. "
+            "Ministra de Inclusión Elma Saiz presented the decree. ILP (Iniciativa Legislativa Popular) "
+            "with over 700,000 signatures was the origin. Digital submission confirmed. "
+            "Include a summary of key requirements at the end. "
+            "Return ONLY the HTML body content (no <html> or <head> tags). Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "borrador-decreto-que-sabemos",
+        "title": "Se publica el borrador del Real Decreto: esto es lo que sabemos",
+        "date": "2026-01-28",
+        "date_str": "28 de enero de 2026",
+        "category": "noticias",
+        "meta": "Análisis del borrador del Real Decreto de regularización: dos vías, requisitos, plazos y novedades.",
+        "prompt": (
+            "Write a 600-word Spanish news analysis blog article about: "
+            "The draft text (borrador) of the Real Decreto de regularización has been published. "
+            "Include: Two pathways — irregular status pathway AND asylum seeker pathway. "
+            "Key requirements: entry before Dec 31 2025, 5 months continuous residence, "
+            "no serious criminal convictions (over 1 year sentence). "
+            "1-year residence permit granted upon approval. Immediate provisional work authorization upon filing. "
+            "Digital (telematic) submission confirmed. Minor children get 5-year permit. "
+            "Process opens April 1 - June 30, 2026. Decision within 3 months max. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "ministerio-confirma-apertura-abril",
+        "title": "El Ministerio confirma: las solicitudes se abrirán en abril",
+        "date": "2026-02-04",
+        "date_str": "4 de febrero de 2026",
+        "category": "noticias",
+        "meta": "El Ministerio de Inclusión confirma que las solicitudes de regularización se abrirán en abril de 2026.",
+        "prompt": (
+            "Write a 450-word Spanish news blog article about: "
+            "Ministerio de Inclusión confirms April 2026 start for regularization applications. "
+            "The Ministry calls for calm — the process is NOT open yet. "
+            "Warns people against unofficial sources and scams. "
+            "The text is still in audiencia pública (public comment period) until February 6. "
+            "After that: Consejo de Estado review, then back to Consejo de Ministros, then BOE publication. "
+            "Applications open the day after BOE publication. "
+            "Emphasize: do NOT pay anyone yet, prepare documents now. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "audiencia-publica-cierra-1200-aportaciones",
+        "title": "Cierra la audiencia pública con más de 1.200 aportaciones",
+        "date": "2026-02-06",
+        "date_str": "6 de febrero de 2026",
+        "category": "noticias",
+        "meta": "La audiencia pública del decreto de regularización cierra con más de 1.200 aportaciones ciudadanas.",
+        "prompt": (
+            "Write a 450-word Spanish news blog article about: "
+            "The public comment period (audiencia pública) for the regularization decree has closed. "
+            "Over 1,200 submissions received from citizens, organizations, and legal experts. "
+            "The text now moves to the Consejo de Estado for mandatory review. "
+            "Timeline remains on track for April opening. "
+            "After Consejo de Estado: back to Consejo de Ministros for final approval, then BOE publication. "
+            "Remind readers: use this waiting time to prepare documents. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "decreto-fase-informes-preceptivos",
+        "title": "El Real Decreto entra en fase de informes preceptivos",
+        "date": "2026-02-09",
+        "date_str": "9 de febrero de 2026",
+        "category": "noticias",
+        "meta": "El Real Decreto de regularización pasa a la fase de informes preceptivos del Consejo de Estado.",
+        "prompt": (
+            "Write a 500-word Spanish news blog article about: "
+            "The regularization Real Decreto enters the mandatory review phase (informes preceptivos). "
+            "The Consejo de Estado is now reviewing the text. Expected ~15 business days for their report. "
+            "After their report, the text goes back to Consejo de Ministros for final approval. "
+            "Then: publication in the BOE. Then: process opens the next day. "
+            "April timeline still achievable. "
+            "Explain each step clearly for people who don't understand Spanish bureaucracy. "
+            "Remind: prepare empadronamiento, pasaporte, antecedentes penales NOW. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "ces-respalda-regularizacion-informe",
+        "title": "El Consejo Económico y Social respalda la regularización",
+        "date": "2026-02-13",
+        "date_str": "13 de febrero de 2026",
+        "category": "noticias",
+        "meta": "El CES presenta informe respaldando la regularización: la inmigración bien gestionada es una bendición.",
+        "prompt": (
+            "Write a 550-word Spanish news blog article about: "
+            "The Consejo Económico y Social (CES) presents report 'Realidad Migratoria en España' in Pamplona. "
+            "CES President Antón Costas says: 'immigration well managed is a blessing for the country.' "
+            "Key data from the report: 3.1 million foreign workers affiliated to Social Security (14.1% of total). "
+            "77% of new self-employment registrations (autónomos) in 2025 were foreign nationals. "
+            "Ministra Elma Saiz confirms the plan operativo (operational plan) is being finalized. "
+            "This institutional backing is important — it means broad support for the regularization. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs."
+        ),
+    },
+    {
+        "slug": "guia-completa-documentos-regularizacion-2026",
+        "title": "Guía completa: todos los documentos que necesitas para la regularización 2026",
+        "date": "2026-02-17",
+        "date_str": "17 de febrero de 2026",
+        "category": "guia",
+        "meta": "Lista completa de documentos para la regularización 2026: empadronamiento, antecedentes, certificado médico y más.",
+        "prompt": (
+            "Write a 700-word Spanish guide blog article about all the documents needed for regularization 2026. "
+            "Organize into sections:\n"
+            "1. STRONGEST DOCUMENTS (most important): empadronamiento histórico, Social Security records (vida laboral), "
+            "tax filings (declaración de la renta or modelo 303).\n"
+            "2. REQUIRED DOCUMENTS: valid pasaporte, certificado de antecedentes penales "
+            "(from home country, must be apostilled), certificado médico (costs 50-80€).\n"
+            "3. SUPPORTING DOCUMENTS that prove 5 months residence: medical records, bank account statements, "
+            "rental contract (contrato de alquiler), utility bills (luz, agua, gas), "
+            "transport cards (abono transporte), delivery app records (Glovo, Uber Eats), "
+            "money transfer records (Western Union, Ria), gym membership, library card, "
+            "vet records (if you have pets), letters from community organizations.\n"
+            "Emphasize: combinations matter — the more supporting documents, the stronger the case. "
+            "Explain the 5-month proof requirement. "
+            "End with CTA to eligibility check at tuspapeles2026.es. "
+            "Return ONLY the HTML body content. Use <h2> for subheadings, <p> for paragraphs, <ul>/<li> for lists."
+        ),
+    },
+]
+
+
+@team_only
+async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /backfill — generate and publish the 7 launch articles to TP repo."""
+    chat_id = update.effective_chat.id
+    repo = GITHUB_REPO_TP
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📚 *BACKFILL: Publishing {len(BACKFILL_ARTICLES)} launch articles to {repo}*\n"
+             f"This will take a few minutes...",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    success = 0
+    for i, article in enumerate(BACKFILL_ARTICLES, 1):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📝 {i}/{len(BACKFILL_ARTICLES)}: {article['title'][:50]}...",
+        )
+
+        try:
+            # Generate HTML body via Claude with legal facts in prompt
+            phase = get_current_phase()
+            system = get_system_prompt("blog", phase)
+            user_msg = article["prompt"]
+
+            response = await asyncio.to_thread(
+                claude.messages.create,
+                model="claude-sonnet-4-20250514",
+                max_tokens=3000,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+
+            html_body = response.content[0].text.strip()
+            # Strip code blocks if present
+            if html_body.startswith("```"):
+                html_body = "\n".join(html_body.split("\n")[1:])
+                if html_body.endswith("```"):
+                    html_body = html_body[:-3]
+                html_body = html_body.strip()
+
+            # If Claude returned JSON instead of raw HTML, extract html_content
+            if html_body.startswith("{"):
+                try:
+                    parsed = json.loads(html_body)
+                    html_body = parsed.get("html_content", html_body)
+                except json.JSONDecodeError:
+                    pass
+
+            # Wrap in full HTML template with historical date
+            full_html = wrap_blog_html(
+                article["title"],
+                html_body,
+                article["meta"],
+                article["date_str"],
+            )
+
+            # Push article HTML
+            file_path = f"blog/{article['slug']}.html"
+            commit_msg = f"Publish: {article['title']}"
+            pub_ok = await publish_to_github(repo, file_path, full_html, commit_msg)
+
+            if pub_ok:
+                # Update index.json with historical date
+                idx_ok = await update_blog_index(
+                    repo,
+                    article["slug"],
+                    article["title"],
+                    article["meta"],
+                    html_body,
+                    article["category"],
+                    date_override=article["date"],
+                )
+                status = "✅" if idx_ok else "⚠️ HTML ok, index failed"
+                success += 1
+            else:
+                status = "❌ publish failed"
+
+            await context.bot.send_message(chat_id=chat_id, text=f"  {status}")
+
+        except Exception as e:
+            logger.error(f"Backfill error for {article['slug']}: {e}")
+            await context.bot.send_message(
+                chat_id=chat_id, text=f"  ❌ Error: {e}"
+            )
+
+        # Rate limit
+        await asyncio.sleep(2)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📚 *BACKFILL COMPLETE* — {success}/{len(BACKFILL_ARTICLES)} articles published!",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -2264,6 +2625,7 @@ def main():
     app.add_handler(CommandHandler("topics", cmd_topics))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("phase", cmd_phase))
+    app.add_handler(CommandHandler("backfill", cmd_backfill))
 
     # Callback handlers (publish buttons, weekly confirm, blog topic selection)
     app.add_handler(CallbackQueryHandler(handle_publish_callback))
