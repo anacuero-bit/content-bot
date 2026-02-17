@@ -11,6 +11,12 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.6 (2026-02-17)
+  - ADD: /articles command — list all published articles from blog/index.json
+  - ADD: /delete command — remove articles via numbered list or slug, with confirmation
+  - ADD: Duplicate detection (>70% title word overlap) on blog publish + auto_update
+  - ADD: REVIEW_MODE env var for auto_update.py — sends articles for Telegram approval
+
 v3.0.5 (2026-02-17)
   - ADD: /backfill command — generates and publishes 7 backdated launch articles
     to tuspapeles2026 repo (Jan 27 – Feb 17 timeline) via Claude API + GitHub API
@@ -1433,6 +1439,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /stats — Generation statistics\n"
         "  /phase \\[phase\\] — Set campaign phase\n"
         "  /backfill — Publish 7 launch articles\n"
+        "  /articles — List all published articles\n"
+        "  /delete \\[slug|number\\] — Remove a published article\n"
         "  /help — This message"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -2304,6 +2312,226 @@ async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==============================================================================
+# DUPLICATE DETECTION
+# ==============================================================================
+
+
+def is_duplicate(new_title: str, existing_articles: list) -> tuple[bool, str | None]:
+    """Check if a new article title has >70% word overlap with existing ones."""
+    new_words = set(new_title.lower().split())
+    for article in existing_articles:
+        existing_words = set(article["title"].lower().split())
+        if not new_words or not existing_words:
+            continue
+        overlap = len(new_words & existing_words) / max(len(new_words), len(existing_words))
+        if overlap > 0.7:
+            return True, article["title"]
+    return False, None
+
+
+async def fetch_blog_index(repo: str) -> tuple[list, str | None]:
+    """Fetch blog/index.json from a GitHub repo. Returns (articles_list, sha)."""
+    if not GITHUB_TOKEN:
+        return [], None
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    url = f"https://api.github.com/repos/{repo}/contents/blog/index.json"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code == 200:
+            resp_data = resp.json()
+            content = json.loads(
+                base64.b64decode(resp_data["content"]).decode("utf-8")
+            )
+            return content.get("articles", []), resp_data.get("sha")
+    return [], None
+
+
+async def delete_github_file(repo: str, path: str, commit_msg: str) -> bool:
+    """Delete a file from a GitHub repo. Returns True on success."""
+    if not GITHUB_TOKEN:
+        return False
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Get current SHA
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error("File not found for deletion: %s", path)
+            return False
+        sha = resp.json().get("sha")
+
+        # Delete
+        resp = await client.delete(url, headers=headers, json={
+            "message": commit_msg,
+            "sha": sha,
+            "branch": "main",
+        })
+        if resp.status_code == 200:
+            return True
+        logger.error("Delete failed for %s: %s %s", path, resp.status_code, resp.text[:200])
+        return False
+
+
+# ==============================================================================
+# /ARTICLES COMMAND
+# ==============================================================================
+
+
+@team_only
+async def cmd_articles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /articles — list all published articles."""
+    repo = GITHUB_REPO_TP
+    wait_msg = await update.message.reply_text("⏳ Fetching articles...")
+
+    try:
+        articles, _ = await fetch_blog_index(repo)
+
+        if not articles:
+            await wait_msg.edit_text("No articles found in blog/index.json.")
+            return
+
+        text = f"📚 *Artículos publicados ({len(articles)} total)*\n\n"
+        for i, a in enumerate(articles, 1):
+            icon = BLOG_CATEGORY_ICONS.get(a.get("category", ""), "📰")
+            date_short = a.get("date", "")
+            if date_short:
+                try:
+                    dt = datetime.strptime(date_short, "%Y-%m-%d")
+                    date_short = f"{dt.day} {['', 'ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][dt.month]}"
+                except ValueError:
+                    pass
+            category = a.get("category", "")
+            text += f"{i}. {icon} {escape_md(a.get('title', 'Sin título'))} — {date_short} · {category}\n"
+
+        text += f"\n/delete \\[número\\] para eliminar"
+
+        await wait_msg.delete()
+        await send_long_message(update, text, context)
+
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Error: {e}")
+
+
+# ==============================================================================
+# /DELETE COMMAND
+# ==============================================================================
+
+# In-memory state for delete flow
+pending_deletes: dict = {}
+
+
+@team_only
+async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /delete [slug|number] — delete an article from the site."""
+    repo = GITHUB_REPO_TP
+    args_text = " ".join(context.args) if context.args else ""
+
+    # If slug provided directly, go to confirmation
+    if args_text:
+        wait_msg = await update.message.reply_text("⏳ Looking up article...")
+        articles, index_sha = await fetch_blog_index(repo)
+
+        # Check if it's a number (from /articles list)
+        target_article = None
+        try:
+            num = int(args_text)
+            if 1 <= num <= len(articles):
+                target_article = articles[num - 1]
+        except ValueError:
+            # It's a slug
+            slug = args_text.strip().lower()
+            for a in articles:
+                if a.get("slug", "") == slug:
+                    target_article = a
+                    break
+
+        if not target_article:
+            await wait_msg.edit_text(f"❌ Article not found: {args_text}")
+            return
+
+        # Store pending delete and ask for confirmation
+        delete_id = hashlib.md5(target_article["slug"].encode()).hexdigest()[:8]
+        pending_deletes[delete_id] = {
+            "article": target_article,
+            "index_sha": index_sha,
+            "all_articles": articles,
+        }
+
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"del_yes_{delete_id}"),
+                InlineKeyboardButton("❌ Cancelar", callback_data=f"del_no_{delete_id}"),
+            ]
+        ]
+        await wait_msg.edit_text(
+            f"¿Eliminar '*{escape_md(target_article['title'])}*'?\n\n"
+            f"Esta acción no se puede deshacer.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    # No args — show numbered list
+    wait_msg = await update.message.reply_text("⏳ Fetching articles...")
+    try:
+        articles, index_sha = await fetch_blog_index(repo)
+
+        if not articles:
+            await wait_msg.edit_text("No articles found.")
+            return
+
+        # Store for later lookup
+        delete_session_id = hashlib.md5(
+            datetime.now().isoformat().encode()
+        ).hexdigest()[:8]
+        pending_deletes[f"list_{delete_session_id}"] = {
+            "articles": articles,
+            "index_sha": index_sha,
+        }
+
+        text = "🗑️ *Selecciona el artículo a eliminar:*\n\n"
+        buttons = []
+        for i, a in enumerate(articles, 1):
+            date_short = a.get("date", "")
+            if date_short:
+                try:
+                    dt = datetime.strptime(date_short, "%Y-%m-%d")
+                    date_short = f"{dt.day} {['', 'ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][dt.month]}"
+                except ValueError:
+                    pass
+            text += f"\\[{i}\\] {escape_md(a.get('title', ''))} ({date_short})\n"
+
+            # Add inline button per article (max 8 to avoid Telegram limits)
+            if i <= 8:
+                delete_id = hashlib.md5(a["slug"].encode()).hexdigest()[:8]
+                pending_deletes[delete_id] = {
+                    "article": a,
+                    "index_sha": index_sha,
+                    "all_articles": articles,
+                }
+                label = f"[{i}] {a.get('title', '')[:35]}"
+                buttons.append([InlineKeyboardButton(label, callback_data=f"del_pick_{delete_id}")])
+
+        markup = InlineKeyboardMarkup(buttons) if buttons else None
+
+        await wait_msg.delete()
+        await send_long_message(update, text, context, reply_markup=markup)
+
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Error: {e}")
+
+
+# ==============================================================================
 # NEWS AUTO-SCAN
 # ==============================================================================
 
@@ -2407,6 +2635,99 @@ async def handle_publish_callback(
         return
 
     data = query.data
+
+    # Delete flow callbacks
+    if data.startswith("del_pick_"):
+        delete_id = data[9:]
+        pending = pending_deletes.get(delete_id)
+        if not pending:
+            await query.answer("Session expired. Run /delete again.", show_alert=True)
+            return
+        article = pending["article"]
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"del_yes_{delete_id}"),
+                InlineKeyboardButton("❌ Cancelar", callback_data=f"del_no_{delete_id}"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"¿Eliminar '*{escape_md(article['title'])}*'?\n\n"
+            f"Esta acción no se puede deshacer.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    if data.startswith("del_no_"):
+        await query.edit_message_text("Cancelado.")
+        return
+
+    if data.startswith("del_yes_"):
+        delete_id = data[8:]
+        pending = pending_deletes.get(delete_id)
+        if not pending:
+            await query.answer("Session expired. Run /delete again.", show_alert=True)
+            return
+        article = pending["article"]
+        slug = article["slug"]
+        repo = GITHUB_REPO_TP
+
+        await query.edit_message_text(f"⏳ Eliminando '{article['title']}'...")
+
+        try:
+            # 1. Delete the HTML file
+            html_deleted = await delete_github_file(
+                repo, f"blog/{slug}.html", f"Delete: {article['title']}"
+            )
+
+            # 2. Remove from index.json
+            all_articles = pending.get("all_articles", [])
+            updated_articles = [a for a in all_articles if a.get("slug") != slug]
+            index_data = json.dumps({"articles": updated_articles}, ensure_ascii=False, indent=2)
+
+            index_ok = await publish_to_github(
+                repo, "blog/index.json", index_data,
+                f"Remove from index: {article['title']}",
+            )
+
+            if html_deleted and index_ok:
+                await query.edit_message_text(f"✅ Eliminado: {article['title']}")
+            elif html_deleted:
+                await query.edit_message_text(f"⚠️ HTML eliminado, pero index.json falló.")
+            else:
+                await query.edit_message_text(f"❌ Error al eliminar. Inténtalo de nuevo.")
+
+            # Clean up
+            pending_deletes.pop(delete_id, None)
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error: {e}")
+        return
+
+    # Duplicate warning confirm
+    if data.startswith("dup_yes_"):
+        article_id = data[8:]
+        article = pending_articles.get(article_id)
+        if not article:
+            await query.answer("Article expired. Generate again.", show_alert=True)
+            return
+        # Show publish buttons
+        buttons = [
+            [
+                InlineKeyboardButton("🚀 PH-Site", callback_data=f"pub_ph_{article_id}"),
+                InlineKeyboardButton("🌐 TP", callback_data=f"pub_tp_{article_id}"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"📝 *Publish anyway:* {escape_md(article.get('title', ''))}\n\nChoose destination:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    if data.startswith("dup_no_"):
+        await query.edit_message_text("Publication cancelled.")
+        return
 
     # Weekly confirm/cancel
     if data == "weekly_confirm":
@@ -2537,6 +2858,28 @@ async def handle_publish_callback(
             )
             return
 
+        # Check for duplicates before publishing
+        try:
+            existing_articles, _ = await fetch_blog_index(repo)
+            dup_found, dup_title = is_duplicate(
+                article.get("title", ""), existing_articles
+            )
+            if dup_found:
+                buttons = [
+                    [
+                        InlineKeyboardButton("✅ Publish anyway", callback_data=f"dup_yes_{article_id}"),
+                        InlineKeyboardButton("❌ Cancel", callback_data=f"dup_no_{article_id}"),
+                    ]
+                ]
+                await query.edit_message_text(
+                    f"⚠️ *Similar article exists:*\n{escape_md(dup_title)}\n\nPublish anyway?",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+                return
+        except Exception as e:
+            logger.warning("Duplicate check failed, proceeding: %s", e)
+
         await query.answer(f"Publishing to {site_name}...")
 
         try:
@@ -2636,6 +2979,8 @@ def main():
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("phase", cmd_phase))
     app.add_handler(CommandHandler("backfill", cmd_backfill))
+    app.add_handler(CommandHandler("articles", cmd_articles))
+    app.add_handler(CommandHandler("delete", cmd_delete))
 
     # Callback handlers (publish buttons, weekly confirm, blog topic selection)
     app.add_handler(CallbackQueryHandler(handle_publish_callback))
