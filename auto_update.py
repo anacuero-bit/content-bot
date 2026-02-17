@@ -23,7 +23,7 @@ import hashlib
 import base64
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin
 
 import feedparser
@@ -630,6 +630,7 @@ def update_blog_index(article: dict) -> bool:
         "title": article["title"],
         "meta": article.get("meta", ""),
         "date": date_str,
+        "published_at": datetime.now(timezone.utc).isoformat(),
         "reading_time": f"{max(1, word_count // 200)} min",
         "category": article.get("category", "noticias"),
         "image": None,
@@ -640,8 +641,11 @@ def update_blog_index(article: dict) -> bool:
         a for a in index_data["articles"] if a.get("slug") != article["slug"]
     ]
     index_data["articles"].append(new_entry)
-    # Sort by date descending
-    index_data["articles"].sort(key=lambda a: a.get("date", ""), reverse=True)
+    # Sort by published_at descending (falls back to date for old articles)
+    index_data["articles"].sort(
+        key=lambda a: a.get("published_at", a.get("date", "")),
+        reverse=True,
+    )
 
     updated_json = json.dumps(index_data, ensure_ascii=False, indent=2)
     return gh_put_file(
