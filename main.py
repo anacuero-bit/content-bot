@@ -11,6 +11,11 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.8 (2026-02-17)
+  - ADD: Auto-update Estado timeline on every blog publish
+  - ADD: auto_update.py — autonomous news scanning + article publishing via GitHub Actions
+  - ADD: GitHub Actions workflow for auto-update every 8h (httpx + feedparser)
+
 v3.0.7 (2026-02-17)
   - FIX: /delete crash — httpx delete() doesn't support json kwarg, use request() instead
   - FIX: Same-day article sorting — add published_at ISO timestamp, sort by it
@@ -79,6 +84,7 @@ import json
 import logging
 import asyncio
 import re
+import html as html_mod
 import random
 import hashlib
 import base64
@@ -918,6 +924,115 @@ async def update_blog_index(
                 f"Index update failed: {push_resp.status_code} {push_resp.text}"
             )
             return False
+
+
+async def update_estado_timeline(
+    repo: str, title: str, summary: str, category: str,
+    date_override: str = None,
+) -> bool:
+    """Inject a new timeline entry into the Estado section of index.html."""
+    if not GITHUB_TOKEN:
+        return False
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    # Fetch current index.html
+    url = f"https://api.github.com/repos/{repo}/contents/index.html"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error("Failed to fetch index.html for Estado update: %s", resp.status_code)
+            return False
+
+        resp_data = resp.json()
+        current_sha = resp_data.get("sha")
+        html_content = base64.b64decode(resp_data["content"]).decode("utf-8")
+
+    # Map blog category to Estado tag
+    tag_map = {
+        "noticias": ("oficial", "Oficial"),
+        "guia": ("tramitacion", "Tramitaci&oacute;n"),
+        "mitos": ("tramitacion", "Tramitaci&oacute;n"),
+        "analisis": ("tramitacion", "Tramitaci&oacute;n"),
+        "historias": ("beneficio", "Beneficio"),
+        "documentos": ("documento", "Documento"),
+    }
+    tag_class, tag_label = tag_map.get(category, ("tramitacion", "Tramitaci&oacute;n"))
+
+    # Build date parts
+    if date_override:
+        try:
+            dt = datetime.strptime(date_override[:10], "%Y-%m-%d")
+        except ValueError:
+            dt = datetime.now()
+    else:
+        dt = datetime.now()
+
+    day = f"{dt.day:02d}"
+    months_short = ["", "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                     "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+    month_year = f"{months_short[dt.month]} {dt.year}"
+
+    safe_title = html_mod.escape(title)
+    safe_summary = html_mod.escape(summary[:200]) if summary else safe_title
+
+    # Build the new timeline entry HTML
+    new_entry = (
+        f'\n                <!-- {day} {month_year} -->\n'
+        f'                <div class="update-item">\n'
+        f'                    <div class="update-date-badge">\n'
+        f'                        <div class="update-date-day">{day}</div>\n'
+        f'                        <div class="update-date-month">{month_year}</div>\n'
+        f'                    </div>\n'
+        f'                    <div class="update-card">\n'
+        f'                        <div class="update-card-top">\n'
+        f'                            <span class="update-tag {tag_class}">{tag_label}</span>\n'
+        f'                        </div>\n'
+        f'                        <h4>{safe_title}</h4>\n'
+        f'                        <p>{safe_summary}</p>\n'
+        f'                    </div>\n'
+        f'                </div>\n'
+    )
+
+    # Insert after the updates-timeline marker, before the first <!-- comment
+    marker = '<div class="updates-timeline" id="updates-timeline">'
+    marker_pos = html_content.find(marker)
+    if marker_pos == -1:
+        logger.error("Could not find updates-timeline marker in index.html")
+        return False
+
+    after = html_content[marker_pos:]
+    first_comment = re.search(r'\n(\s*<!-- \d+ )', after)
+    if first_comment:
+        insert_pos = marker_pos + first_comment.start()
+        updated_html = html_content[:insert_pos] + new_entry + html_content[insert_pos:]
+    else:
+        # Fallback: insert after the marker line
+        end_of_marker_line = html_content.find('\n', marker_pos + len(marker))
+        next_line_end = html_content.find('\n', end_of_marker_line + 1)
+        insert_pos = next_line_end
+        updated_html = html_content[:insert_pos] + new_entry + html_content[insert_pos:]
+
+    # Update the timeline-entry date text
+    months_full = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+                   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    today_str = f"{dt.day} de {months_full[dt.month]} de {dt.year}"
+    updated_html = re.sub(
+        r'(<span class="timeline-date">)[^<]+(</span>)',
+        f'\\g<1>{today_str}\\g<2>',
+        updated_html,
+        count=1,
+    )
+
+    # Push updated index.html
+    success = await publish_to_github(
+        repo, "index.html", updated_html,
+        f"Estado update: {title[:60]}"
+    )
+    return success
 
 
 def wrap_blog_html(
@@ -2910,6 +3025,13 @@ async def handle_publish_callback(
                     repo, slug, title, meta_desc, html_content, category
                 )
                 index_status = " + index.json updated" if index_ok else " (index.json update failed)"
+
+                # Update Estado timeline on homepage
+                estado_ok = await update_estado_timeline(
+                    repo, title, meta_desc, category
+                )
+                if estado_ok:
+                    index_status += " + Estado updated"
 
                 # Update the message to show success
                 original_text = query.message.text or ""
