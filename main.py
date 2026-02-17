@@ -11,6 +11,17 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.0.4 (2026-02-17)
+  - FIX: Blog publish now updates blog/index.json (noticias listing page)
+  - FIX: Legal facts block injected into system prompt (5 MONTHS not years)
+  - FIX: Blog articles always sent as HTML file attachment (no truncation)
+  - ADD: Categorized /blog topics (noticias, guias, mitos, analisis, historias)
+  - ADD: /blog noticias — filter by category
+  - ADD: Article category auto-detection for publish
+  - ADD: /scan — force immediate news scan
+  - ADD: Scheduled news auto-scan every 6h (6am/12pm/6pm/midnight Madrid)
+  - ADD: News alert buttons (Blog/TikTok/WhatsApp/Ignore) for team
+
 v3.0.3 (2026-02-17)
   - UPDATED: Simplified topic rotation — plain string pools, cleaner pick functions
   - UPDATED: TikTok InVideo prompt — European Spanish voice, color-coded overlays,
@@ -61,6 +72,7 @@ from functools import wraps
 import anthropic
 import httpx
 import feedparser
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -115,6 +127,16 @@ gen_stats = {
 
 # Telegram max message length
 TG_MAX_LEN = 4096
+
+# News auto-scan sources
+NEWS_SCAN_SOURCES = [
+    "https://news.google.com/rss/search?q=regularizaci%C3%B3n+2026+Espa%C3%B1a&hl=es&gl=ES&ceid=ES:es",
+    "https://news.google.com/rss/search?q=decreto+extranjer%C3%ADa+2026&hl=es&gl=ES&ceid=ES:es",
+    "https://news.google.com/rss/search?q=regularizaci%C3%B3n+extraordinaria+Espa%C3%B1a&hl=es&gl=ES&ceid=ES:es",
+]
+
+# In-memory set of seen headline keys (resets on restart)
+seen_headlines: set = set()
 
 
 # ==============================================================================
@@ -232,6 +254,88 @@ RECENT_TOPICS = {
 }
 
 MAX_RECENT = 10  # Remember last 10 topics per type
+
+# Blog topic pools by category (for /blog suggestions)
+BLOG_TOPICS = {
+    "noticias": [
+        "Real Decreto en fase de informes: qué significa para ti",
+        "Consejo de Estado revisa el texto — plazo se mantiene",
+        "Audiencia pública cierra con más de 1.200 aportaciones",
+        "Ministerio confirma apertura en abril: lo que sabemos",
+        "Diferencias entre el borrador de enero y el texto actual",
+        "¿Qué falta para la publicación en el BOE?",
+        "Cronología completa: del anuncio al decreto",
+        "Lo que dicen los expertos sobre el nuevo decreto",
+    ],
+    "guias": [
+        "5 documentos que debes buscar AHORA para la regularización",
+        "Empadronamiento histórico: cómo conseguirlo paso a paso",
+        "Certificado de antecedentes penales: guía completa",
+        "Cómo preparar tu certificado médico para la solicitud",
+        "Guía completa de documentos para la regularización 2026",
+        "Qué hacer si no tienes empadronamiento",
+        "Cómo demostrar 5 meses de residencia sin padrón",
+    ],
+    "mitos": [
+        "No, no necesitas oferta de trabajo — la cláusula de vulnerabilidad explicada",
+        "Mito: solo pueden aplicar latinoamericanos",
+        "Mito: te pueden deportar por intentar regularizarte",
+        "Mito: necesitas hablar español perfecto",
+        "5 mitos sobre la regularización que debes dejar de creer",
+    ],
+    "analisis": [
+        "Regularización 2005 vs 2026: las 7 diferencias clave",
+        "Por qué esta regularización tiene mayor tasa de aprobación esperada",
+        "Qué pasa si te deniegan: opciones y recursos",
+        "El impacto económico de regularizar 500.000 personas",
+    ],
+    "historias": [
+        "Así cambió la vida de María después de la regularización de 2005",
+        "De vivir con miedo a tener papeles: testimonios reales",
+        "Lo que significa tener papeles: derechos que obtienes",
+    ],
+}
+
+BLOG_CATEGORY_ICONS = {
+    "noticias": "📰",
+    "guias": "📋",
+    "mitos": "❌",
+    "analisis": "📊",
+    "historias": "💬",
+}
+
+# Weights for random category selection (news-heavy)
+BLOG_CATEGORY_WEIGHTS = {
+    "noticias": 3, "guias": 2, "mitos": 1, "analisis": 2, "historias": 1,
+}
+
+
+def suggest_blog_topics(category_filter: str = None, count: int = 3) -> list[dict]:
+    """Suggest blog topics from different categories, weighted toward news.
+
+    Returns list of {"topic": str, "category": str}.
+    """
+    if category_filter and category_filter in BLOG_TOPICS:
+        pool = BLOG_TOPICS[category_filter]
+        chosen = random.sample(pool, min(count, len(pool)))
+        return [{"topic": t, "category": category_filter} for t in chosen]
+
+    suggestions = []
+    used_cats = set()
+    categories = list(BLOG_TOPICS.keys())
+
+    for _ in range(count):
+        available = [c for c in categories if c not in used_cats]
+        if not available:
+            available = categories
+        weights = [BLOG_CATEGORY_WEIGHTS.get(c, 1) for c in available]
+        cat = random.choices(available, weights=weights, k=1)[0]
+        used_cats.add(cat)
+
+        topic = random.choice(BLOG_TOPICS[cat])
+        suggestions.append({"topic": topic, "category": cat})
+
+    return suggestions
 
 
 def pick_topic(content_type, user_topic=None):
@@ -383,6 +487,34 @@ COMPETITORS (differentiate naturally, never attack):
 - They process manually → we use AI document validation
 - They work business hours → our bot works 24/7
 - They have no referral program → we have Cónsul/Embajador tiers
+
+LEGAL FACTS — NEVER CONTRADICT THESE. IF UNSURE, USE THESE EXACT FACTS:
+
+ELIGIBILITY REQUIREMENTS:
+- Entry: Must have entered Spain BEFORE December 31, 2025
+- Residence: At least 5 MONTHS continuous stay (NOT years — FIVE MONTHS)
+- Criminal record: No serious convictions (over 1 year sentence)
+- Job offer: NOT REQUIRED — vulnerability clause presumes vulnerability
+- Nationality: ALL nationalities eligible (not just Latin American)
+
+APPLICATION:
+- Window: April 1 – June 30, 2026 (3 months)
+- Process: 100% online (telematic)
+- Provisional work permit: Granted IMMEDIATELY upon filing
+- Decision: Within 3 months maximum
+
+KEY MESSAGES:
+- Vulnerability clause = NO job offer needed (biggest difference from 2005)
+- Expected approval rate: 80-90% based on 2005 precedent (NEVER guarantee)
+- Our price: from €199 (competitors charge €350-450)
+- Capacity: 1,000 clients
+- Service backed by registered lawyers (abogados colegiados)
+
+NEVER SAY:
+- "Guaranteed approval" or "100%"
+- "2 years" or "3 years" of residency — IT IS 5 MONTHS
+- "You need a job offer"
+- "Only for Latin Americans"
 """
 
     # Phase-specific instructions
@@ -655,6 +787,99 @@ async def publish_to_github(
         else:
             logger.error(
                 f"GitHub publish failed: {resp.status_code} {resp.text}"
+            )
+            return False
+
+
+def detect_blog_category(title: str, topic: str = "") -> str:
+    """Detect blog article category from title/topic text."""
+    text = f"{title} {topic}".lower()
+    if any(w in text for w in ["mito", "myth", "falso", "verdad o mentira"]):
+        return "mitos"
+    if any(w in text for w in [
+        "real decreto", "boe", "consejo de estado", "audiencia",
+        "ministerio", "actualización", "noticia", "borrador", "cronología",
+        "update", "news",
+    ]):
+        return "noticias"
+    if any(w in text for w in [
+        "guía", "cómo", "paso a paso", "preparar", "documento",
+        "certificado", "empadronamiento", "checklist",
+    ]):
+        return "guia"
+    if any(w in text for w in [
+        "vs", "comparación", "diferencia", "análisis", "impacto",
+        "por qué", "tasa",
+    ]):
+        return "analisis"
+    if any(w in text for w in [
+        "historia", "testimonio", "vida", "cambió", "esperanza",
+    ]):
+        return "historias"
+    return "guia"
+
+
+async def update_blog_index(
+    repo: str, slug: str, title: str, meta: str,
+    html_content: str, category: str = "guia",
+) -> bool:
+    """Fetch blog/index.json, add new article entry, push updated JSON."""
+    if not GITHUB_TOKEN:
+        return False
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    index_url = f"https://api.github.com/repos/{repo}/contents/blog/index.json"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Fetch current index.json
+        resp = await client.get(index_url, headers=headers)
+        if resp.status_code == 200:
+            resp_data = resp.json()
+            current_sha = resp_data.get("sha")
+            current_content = json.loads(
+                base64.b64decode(resp_data["content"]).decode("utf-8")
+            )
+        else:
+            current_sha = None
+            current_content = {"articles": []}
+
+        # Build new entry
+        word_count = len(html_content.split())
+        new_entry = {
+            "slug": slug,
+            "title": title,
+            "meta": meta,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "reading_time": f"{max(1, word_count // 200)} min",
+            "category": category,
+            "image": None,
+        }
+
+        # Remove duplicate slugs, insert newest first
+        current_content["articles"] = [
+            a for a in current_content["articles"] if a.get("slug") != slug
+        ]
+        current_content["articles"].insert(0, new_entry)
+
+        # Push updated index.json
+        updated_json = json.dumps(current_content, ensure_ascii=False, indent=2)
+        push_data = {
+            "message": f"Update index: {title}",
+            "content": base64.b64encode(updated_json.encode("utf-8")).decode("utf-8"),
+            "branch": "main",
+        }
+        if current_sha:
+            push_data["sha"] = current_sha
+
+        push_resp = await client.put(index_url, headers=headers, json=push_data)
+        if push_resp.status_code in (200, 201):
+            return True
+        else:
+            logger.error(
+                f"Index update failed: {push_resp.status_code} {push_resp.text}"
             )
             return False
 
@@ -1106,7 +1331,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🤖 *Content Bot v3.0 — Commands*\n\n"
         "*Single Generation:*\n"
-        "  /blog \\[topic\\] — SEO blog article\n"
+        "  /blog \\[topic|noticias|guias|mitos\\] — SEO blog article\n"
         "  /tiktok \\[topic\\] — TikTok script\n"
         "  /carousel \\[topic\\] — Instagram carousel\n"
         "  /caption \\[ig|fb\\] \\[topic\\] — Social caption\n"
@@ -1124,6 +1349,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /weekly — Full weekly pack (~46 pieces)\n\n"
         "*Tools:*\n"
         "  /news — Latest regularización news\n"
+        "  /scan — Force immediate news scan\n"
         "  /topics — 10 topic suggestions\n"
         "  /stats — Generation statistics\n"
         "  /phase \\[phase\\] — Set campaign phase\n"
@@ -1134,40 +1360,45 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @team_only
 async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /blog [topic] command."""
-    topic = " ".join(context.args) if context.args else ""
+    """Handle /blog [topic|category] command.
 
-    if not topic:
-        # Suggest 3 topics via Claude
-        wait_msg = await update.message.reply_text("⏳ Generating topic suggestions...")
-        try:
-            data = await generate_content("topics", phase=get_current_phase())
-            topics_list = data.get("topics", [])[:3]
+    /blog             → suggest 3 topics from different categories
+    /blog noticias    → suggest 3 news topics
+    /blog <topic>     → generate article on that topic
+    """
+    args_text = " ".join(context.args) if context.args else ""
 
-            if not topics_list:
-                await wait_msg.edit_text("❌ Could not generate topics. Try /blog <topic> instead.")
-                return
+    # Check if arg is a category filter
+    category_filter = None
+    if args_text.lower() in BLOG_TOPICS:
+        category_filter = args_text.lower()
+        args_text = ""
 
-            buttons = []
-            for t in topics_list:
-                title = t.get("title", "Topic")[:60]
-                buttons.append(
-                    [InlineKeyboardButton(title, callback_data=f"blog_{title[:40]}")]
-                )
-            markup = InlineKeyboardMarkup(buttons)
-            await wait_msg.edit_text(
-                "📝 *Choose a blog topic:*",
-                reply_markup=markup,
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        except Exception as e:
-            await wait_msg.edit_text(f"❌ Error: {e}")
+    if not args_text:
+        # Suggest 3 topics from local pool (instant, no API call)
+        suggestions = suggest_blog_topics(category_filter, count=3)
+
+        buttons = []
+        for s in suggestions:
+            icon = BLOG_CATEGORY_ICONS.get(s["category"], "📝")
+            label = f"{icon} {s['topic']}"[:60]
+            cb_data = f"blog_{s['topic'][:40]}"
+            buttons.append([InlineKeyboardButton(label, callback_data=cb_data)])
+
+        cat_label = f" ({category_filter})" if category_filter else ""
+        markup = InlineKeyboardMarkup(buttons)
+        await update.message.reply_text(
+            f"📝 *Choose a blog topic{cat_label}:*",
+            reply_markup=markup,
+            parse_mode=ParseMode.MARKDOWN,
+        )
         return
+
+    topic = args_text
 
     wait_msg = await update.message.reply_text("⏳ Generating blog article...")
     try:
         data = await generate_content("blog", topic)
-        formatted = format_blog_for_telegram(data)
 
         # Store article for publish buttons
         article_id = hashlib.md5(
@@ -1189,31 +1420,31 @@ async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await wait_msg.delete()
 
-        # If article is too long, send as file
+        word_count = data.get("word_count", len(data.get("html_content", "").split()))
+        reading_time = max(1, word_count // 200)
+        category = detect_blog_category(data.get("title", ""), topic)
+
+        # Always send short summary + publish buttons + file attachment
+        meta_msg = (
+            f"📝 *BLOG ARTICLE READY*\n\n"
+            f"*Title:* {escape_md(data.get('title', 'Sin título'))}\n"
+            f"*Meta:* {escape_md(data.get('meta_description', ''))}\n"
+            f"*Slug:* {data.get('slug', '')}\n"
+            f"*Category:* {category}\n"
+            f"*Words:* {word_count} | *Reading time:* {reading_time} min\n\n"
+            f"Full article attached as HTML file below."
+        )
+        await send_long_message(
+            update, meta_msg, context, reply_markup=markup
+        )
         html_content = data.get("html_content", "")
-        if len(formatted) > TG_MAX_LEN:
-            # Send metadata + buttons as message
-            meta_msg = (
-                f"📝 *BLOG ARTICLE READY*\n\n"
-                f"*Title:* {escape_md(data.get('title', ''))}\n"
-                f"*Meta:* {escape_md(data.get('meta_description', ''))}\n"
-                f"*Words:* {data.get('word_count', '?')}\n\n"
-                f"Full article sent as file below."
-            )
-            await send_long_message(
-                update, meta_msg, context, reply_markup=markup
-            )
-            await send_as_file(
-                update.effective_chat.id,
-                html_content,
-                f"{data.get('slug', 'article')}.html",
-                "Blog article HTML",
-                context,
-            )
-        else:
-            await send_long_message(
-                update, formatted, context, reply_markup=markup
-            )
+        await send_as_file(
+            update.effective_chat.id,
+            html_content,
+            f"{data.get('slug', 'article')}.html",
+            f"📝 {data.get('title', 'Blog article')}",
+            context,
+        )
 
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating blog: {e}")
@@ -1702,6 +1933,92 @@ async def cmd_phase(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==============================================================================
+# NEWS AUTO-SCAN
+# ==============================================================================
+
+
+async def auto_scan_news(bot=None):
+    """Scheduled scan for new regularización news. Alerts team on new items."""
+    new_items = []
+
+    for source_url in NEWS_SCAN_SOURCES:
+        try:
+            feed = await asyncio.to_thread(feedparser.parse, source_url)
+            for entry in feed.entries[:5]:
+                headline_key = entry.title.strip().lower()[:100]
+                if headline_key not in seen_headlines:
+                    new_items.append({
+                        "title": entry.title,
+                        "link": entry.link,
+                        "date": getattr(entry, "published", ""),
+                        "summary": getattr(entry, "summary", "")[:200],
+                    })
+                    seen_headlines.add(headline_key)
+        except Exception as e:
+            logger.error(f"Auto-scan error for {source_url}: {e}")
+
+    if not new_items:
+        return
+
+    # Deduplicate by title prefix
+    seen_titles = set()
+    unique = []
+    for item in new_items:
+        key = item["title"][:50].lower()
+        if key not in seen_titles:
+            seen_titles.add(key)
+            unique.append(item)
+
+    for item in unique[:5]:  # Max 5 alerts per scan
+        topic_short = item["title"][:40]
+        alert_text = (
+            f"🚨 *NUEVA NOTICIA DETECTADA*\n\n"
+            f"📰 {escape_md(item['title'])}\n"
+            f"📅 {escape_md(item['date'])}\n\n"
+            f"{escape_md(item['summary'])}\n\n"
+            f"¿Generar contenido sobre esto?"
+        )
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "📝 Blog", callback_data=f"news_blog_{topic_short}"
+                ),
+                InlineKeyboardButton(
+                    "🎬 TikTok", callback_data=f"news_tiktok_{topic_short}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📱 WhatsApp", callback_data=f"news_wa_{topic_short}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Ignorar", callback_data="news_ignore"
+                ),
+            ],
+        ]
+        markup = InlineKeyboardMarkup(buttons)
+
+        for chat_id in TEAM_CHAT_IDS:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=alert_text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.error(f"Failed to alert chat {chat_id}: {e}")
+
+
+@team_only
+async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /scan — force immediate news scan."""
+    wait_msg = await update.message.reply_text("🔍 Scanning for new headlines...")
+    await auto_scan_news(bot=context.bot)
+    await wait_msg.edit_text("✅ News scan complete. Any new items were sent above.")
+
+
+# ==============================================================================
 # CALLBACK HANDLERS
 # ==============================================================================
 
@@ -1727,6 +2044,67 @@ async def handle_publish_callback(
         return
     elif data == "weekly_cancel":
         await query.edit_message_text("Cancelled.")
+        return
+
+    # News alert actions
+    if data == "news_ignore":
+        await query.edit_message_text("Ignored.")
+        return
+    if data.startswith("news_blog_"):
+        topic = data[10:]
+        wait_msg = await query.message.reply_text("⏳ Generating blog article from news...")
+        try:
+            article_data = await generate_content("blog", topic)
+            article_id = hashlib.md5(
+                json.dumps(article_data, default=str).encode()
+            ).hexdigest()[:8]
+            pending_articles[article_id] = article_data
+            buttons = [
+                [
+                    InlineKeyboardButton("🚀 PH-Site", callback_data=f"pub_ph_{article_id}"),
+                    InlineKeyboardButton("🌐 TP", callback_data=f"pub_tp_{article_id}"),
+                ]
+            ]
+            word_count = article_data.get("word_count", len(article_data.get("html_content", "").split()))
+            meta_msg = (
+                f"📝 *BLOG ARTICLE READY*\n\n"
+                f"*Title:* {escape_md(article_data.get('title', ''))}\n"
+                f"*Words:* {word_count}\n\n"
+                f"Full article attached as HTML file below."
+            )
+            await wait_msg.delete()
+            await send_long_message(update, meta_msg, context, reply_markup=InlineKeyboardMarkup(buttons), chat_id=query.message.chat_id)
+            await send_as_file(
+                query.message.chat_id,
+                article_data.get("html_content", ""),
+                f"{article_data.get('slug', 'article')}.html",
+                f"📝 {article_data.get('title', 'Blog')}",
+                context,
+            )
+        except Exception as e:
+            await wait_msg.edit_text(f"❌ Error: {e}")
+        return
+    if data.startswith("news_tiktok_"):
+        topic = data[12:]
+        wait_msg = await query.message.reply_text("⏳ Generating TikTok script from news...")
+        try:
+            tiktok_data = await generate_content("tiktok", topic)
+            formatted = format_tiktok_for_telegram(tiktok_data)
+            await wait_msg.delete()
+            await send_long_message(update, formatted, context, chat_id=query.message.chat_id)
+        except Exception as e:
+            await wait_msg.edit_text(f"❌ Error: {e}")
+        return
+    if data.startswith("news_wa_"):
+        topic = data[8:]
+        wait_msg = await query.message.reply_text("⏳ Generating WhatsApp message from news...")
+        try:
+            wa_data = await generate_content("whatsapp", f"type: news — {topic}")
+            formatted = format_whatsapp_for_telegram(wa_data)
+            await wait_msg.delete()
+            await send_long_message(update, formatted, context, chat_id=query.message.chat_id)
+        except Exception as e:
+            await wait_msg.edit_text(f"❌ Error: {e}")
         return
 
     # Blog topic selection
@@ -1806,9 +2184,16 @@ async def handle_publish_callback(
             )
 
             if success:
+                # Update blog/index.json
+                category = detect_blog_category(title, slug)
+                index_ok = await update_blog_index(
+                    repo, slug, title, meta_desc, html_content, category
+                )
+                index_status = " + index.json updated" if index_ok else " (index.json update failed)"
+
                 # Update the message to show success
                 original_text = query.message.text or ""
-                new_text = original_text + f"\n\n✅ Published to {site_name}!"
+                new_text = original_text + f"\n\n✅ Published to {site_name}!{index_status}"
                 try:
                     await query.edit_message_text(
                         new_text[:TG_MAX_LEN],
@@ -1875,6 +2260,7 @@ def main():
 
     # Monitoring & tools
     app.add_handler(CommandHandler("news", cmd_news))
+    app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("topics", cmd_topics))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("phase", cmd_phase))
@@ -1884,6 +2270,22 @@ def main():
 
     # Catch-all for non-team members
     app.add_handler(MessageHandler(filters.ALL, handle_unauthorized))
+
+    # Schedule news auto-scan every 6 hours (Madrid time)
+    scheduler = AsyncIOScheduler(timezone="Europe/Madrid")
+
+    async def post_init(application):
+        """Start the scheduler after the application is initialized."""
+        scheduler.add_job(
+            auto_scan_news,
+            "cron",
+            hour="6,12,18,0",
+            kwargs={"bot": application.bot},
+        )
+        scheduler.start()
+        logger.info("News auto-scan scheduler started (every 6h Madrid time)")
+
+    app.post_init = post_init
 
     logger.info("Content Bot v3.0 starting")
     logger.info(f"Team IDs: {TEAM_CHAT_IDS}")
