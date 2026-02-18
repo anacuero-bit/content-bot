@@ -11,6 +11,16 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.1.0 (2026-02-18)
+  - ADD: Telegram channel publishing to @tuspapeles2026
+  - ADD: post_to_channel() function for sending content to channel
+  - ADD: Channel formatters for all 7 content types (blog, tiktok, carousel, caption, whatsapp, fbpost, story)
+  - ADD: "📢 Canal" button on all blog publish dialogs
+  - ADD: "📢 Publicar en canal" button on all non-blog content outputs
+  - ADD: "📢 Canal" button on news alerts (both /news and auto-scan)
+  - ADD: pub_ch_, chpost_, news_chan_ callback handlers
+  - REM: Removed PH-Site publish buttons (consolidated to web + channel)
+
 v3.0.9 (2026-02-18)
   - UPD: wrap_blog_html() now outputs full site template: nav, ticker, share bar,
     category badge, prev/next JS navigation, navy CTA box, 4-column footer
@@ -132,6 +142,7 @@ TEAM_CHAT_IDS = [
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_PH = os.environ.get("GITHUB_REPO_PH", "anacuero-bit/PH-Site")
 GITHUB_REPO_TP = os.environ.get("GITHUB_REPO_TP", "anacuero-bit/tus-papeles-2026")
+TELEGRAM_CHANNEL = "@tuspapeles2026"
 
 # Claude client
 claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
@@ -146,6 +157,9 @@ phase_override: Optional[str] = None
 
 # In-memory article cache for publish buttons
 pending_articles: dict = {}
+
+# In-memory cache for channel publish buttons (non-blog content)
+pending_channel_posts: dict = {}
 
 # Generation stats (resets on restart)
 gen_stats = {
@@ -828,6 +842,29 @@ async def publish_to_github(
             logger.error(
                 f"GitHub publish failed: {resp.status_code} {resp.text}"
             )
+            return False
+
+
+async def post_to_channel(bot, text: str, parse_mode=ParseMode.MARKDOWN) -> bool:
+    """Post a message to the Telegram channel. Returns True on success."""
+    try:
+        await bot.send_message(
+            chat_id=TELEGRAM_CHANNEL,
+            text=text[:TG_MAX_LEN],
+            parse_mode=parse_mode,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Channel post failed: {e}")
+        # Retry without parse_mode
+        try:
+            await bot.send_message(
+                chat_id=TELEGRAM_CHANNEL,
+                text=text[:TG_MAX_LEN],
+            )
+            return True
+        except Exception as e2:
+            logger.error(f"Channel post retry failed: {e2}")
             return False
 
 
@@ -1642,6 +1679,123 @@ FORMATTERS = {
 
 
 # ==============================================================================
+# CHANNEL FORMATTERS — for @tuspapeles2026 channel posts
+# ==============================================================================
+
+
+def channel_blog(data: dict) -> str:
+    """Format blog article for channel post."""
+    title = data.get("title", "Sin título")
+    meta = data.get("meta_description", "")
+    slug = data.get("slug", "article")
+    url = f"https://tuspapeles2026.es/blog/{slug}.html"
+    return (
+        f"📝 *{title}*\n\n"
+        f"{meta}\n\n"
+        f"👉 Lee el artículo completo: {url}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_tiktok(data: dict) -> str:
+    """Format TikTok script for channel post."""
+    hook = data.get("hook", "")
+    script = data.get("script", "")
+    hashtags = data.get("hashtags", "")
+    return (
+        f"🎬 *NUEVO TIKTOK*\n\n"
+        f"🎯 *Hook:* {hook}\n\n"
+        f"📝 {script}\n\n"
+        f"{hashtags}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_carousel(data: dict) -> str:
+    """Format carousel for channel post."""
+    topic = data.get("topic", "")
+    slides = data.get("slides", [])
+    slides_text = ""
+    for s in slides:
+        title = s.get("title", s.get("headline", ""))
+        slides_text += f"📌 {title}\n"
+    caption = data.get("caption", "")
+    return (
+        f"📸 *NUEVO CAROUSEL: {topic}*\n\n"
+        f"{slides_text}\n"
+        f"{caption}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_caption(data: dict) -> str:
+    """Format caption for channel post."""
+    platform = data.get("platform", "general")
+    caption_text = data.get("caption_text", "")
+    hashtags = data.get("hashtags", "")
+    return (
+        f"✏️ *CAPTION ({platform})*\n\n"
+        f"{caption_text}\n\n"
+        f"{hashtags}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_whatsapp(data: dict) -> str:
+    """Format WhatsApp message for channel post."""
+    msg_type = data.get("type", "general")
+    message = data.get("message_text", "")
+    return (
+        f"📱 *MENSAJE WHATSAPP ({msg_type})*\n\n"
+        f"{message}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_fbpost(data: dict) -> str:
+    """Format Facebook post for channel post."""
+    post_text = data.get("post_text", "")
+    return (
+        f"📘 *FACEBOOK POST*\n\n"
+        f"{post_text}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+def channel_story(data: dict) -> str:
+    """Format Instagram Story for channel post."""
+    title = data.get("title", "")
+    body = data.get("body", "")
+    cta = data.get("cta", "")
+    return (
+        f"📱 *INSTAGRAM STORY*\n\n"
+        f"*{title}*\n\n"
+        f"{body}\n\n"
+        f"👉 {cta}\n\n"
+        f"@tuspapeles2026"
+    )
+
+
+CHANNEL_FORMATTERS = {
+    "blog": channel_blog,
+    "tiktok": channel_tiktok,
+    "carousel": channel_carousel,
+    "caption": channel_caption,
+    "whatsapp": channel_whatsapp,
+    "fbpost": channel_fbpost,
+    "story": channel_story,
+}
+
+
+def format_content_for_channel(content_type: str, data: dict) -> str:
+    """Route to the appropriate channel formatter."""
+    formatter = CHANNEL_FORMATTERS.get(content_type)
+    if formatter:
+        return formatter(data)
+    return f"📢 Nuevo contenido disponible\n\n@tuspapeles2026"
+
+
+# ==============================================================================
 # TELEGRAM MESSAGE HELPERS
 # ==============================================================================
 
@@ -1825,10 +1979,10 @@ async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = [
             [
                 InlineKeyboardButton(
-                    "🚀 Publish to PH-Site", callback_data=f"pub_ph_{article_id}"
+                    "🌐 Publicar en web", callback_data=f"pub_tp_{article_id}"
                 ),
                 InlineKeyboardButton(
-                    "🌐 Publish to TP", callback_data=f"pub_tp_{article_id}"
+                    "📢 Canal", callback_data=f"pub_ch_{article_id}"
                 ),
             ]
         ]
@@ -1875,8 +2029,13 @@ async def cmd_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("tiktok", topic)
         formatted = format_tiktok_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "tiktok", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating TikTok: {e}")
 
@@ -1890,8 +2049,13 @@ async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("carousel", topic)
         formatted = format_carousel_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "carousel", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating carousel: {e}")
 
@@ -1918,8 +2082,13 @@ async def cmd_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("caption", topic)
         formatted = format_caption_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "caption", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating caption: {e}")
 
@@ -1940,8 +2109,13 @@ async def cmd_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("whatsapp", topic)
         formatted = format_whatsapp_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "whatsapp", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating WhatsApp message: {e}")
 
@@ -1955,8 +2129,13 @@ async def cmd_fbpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("fbpost", topic)
         formatted = format_fbpost_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "fbpost", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating FB post: {e}")
 
@@ -1977,8 +2156,13 @@ async def cmd_story(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await generate_content("story", topic)
         formatted = format_story_for_telegram(data)
+        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+        pending_channel_posts[post_id] = {"type": "story", "data": data}
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]])
         await wait_msg.delete()
-        await send_long_message(update, formatted, context)
+        await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating Story: {e}")
 
@@ -2028,12 +2212,12 @@ async def _batch_generate(
                 buttons = [
                     [
                         InlineKeyboardButton(
-                            "🚀 PH-Site",
-                            callback_data=f"pub_ph_{article_id}",
+                            "🌐 Publicar en web",
+                            callback_data=f"pub_tp_{article_id}",
                         ),
                         InlineKeyboardButton(
-                            "🌐 TP",
-                            callback_data=f"pub_tp_{article_id}",
+                            "📢 Canal",
+                            callback_data=f"pub_ch_{article_id}",
                         ),
                     ]
                 ]
@@ -2250,6 +2434,9 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     InlineKeyboardButton(
                         "📱 WA", callback_data=f"news_wa_{topic_short}"
+                    ),
+                    InlineKeyboardButton(
+                        "📢 Canal", callback_data=f"news_chan_{topic_short}"
                     ),
                 ],
             ]
@@ -2921,6 +3108,9 @@ async def auto_scan_news(bot=None):
                     "📱 WhatsApp", callback_data=f"news_wa_{topic_short}"
                 ),
                 InlineKeyboardButton(
+                    "📢 Canal", callback_data=f"news_chan_{topic_short}"
+                ),
+                InlineKeyboardButton(
                     "❌ Ignorar", callback_data="news_ignore"
                 ),
             ],
@@ -3044,8 +3234,8 @@ async def handle_publish_callback(
         # Show publish buttons
         buttons = [
             [
-                InlineKeyboardButton("🚀 PH-Site", callback_data=f"pub_ph_{article_id}"),
-                InlineKeyboardButton("🌐 TP", callback_data=f"pub_tp_{article_id}"),
+                InlineKeyboardButton("🌐 Publicar en web", callback_data=f"pub_tp_{article_id}"),
+                InlineKeyboardButton("📢 Canal", callback_data=f"pub_ch_{article_id}"),
             ]
         ]
         await query.edit_message_text(
@@ -3083,8 +3273,8 @@ async def handle_publish_callback(
             pending_articles[article_id] = article_data
             buttons = [
                 [
-                    InlineKeyboardButton("🚀 PH-Site", callback_data=f"pub_ph_{article_id}"),
-                    InlineKeyboardButton("🌐 TP", callback_data=f"pub_tp_{article_id}"),
+                    InlineKeyboardButton("🌐 Publicar en web", callback_data=f"pub_tp_{article_id}"),
+                    InlineKeyboardButton("📢 Canal", callback_data=f"pub_ch_{article_id}"),
                 ]
             ]
             word_count = article_data.get("word_count", len(article_data.get("html_content", "").split()))
@@ -3128,6 +3318,30 @@ async def handle_publish_callback(
         except Exception as e:
             await wait_msg.edit_text(f"❌ Error: {e}")
         return
+    if data.startswith("news_chan_"):
+        topic = data[10:]
+        await query.answer("Publicando noticia en canal...")
+        try:
+            channel_text = (
+                f"🚨 *NOTICIA: Regularización 2026*\n\n"
+                f"📰 {topic}\n\n"
+                f"Más info en tuspapeles2026.es\n\n"
+                f"@tuspapeles2026"
+            )
+            ok = await post_to_channel(context.bot, channel_text)
+            original_text = query.message.text or ""
+            if ok:
+                new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
+            else:
+                new_text = original_text + "\n\n❌ Error al publicar en canal"
+            try:
+                await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                await query.edit_message_text(new_text[:TG_MAX_LEN])
+        except Exception as e:
+            logger.error(f"News channel post error: {e}")
+            await query.answer(f"Error: {e}", show_alert=True)
+        return
 
     # Blog topic selection
     if data.startswith("blog_"):
@@ -3145,12 +3359,12 @@ async def handle_publish_callback(
             buttons = [
                 [
                     InlineKeyboardButton(
-                        "🚀 Publish to PH-Site",
-                        callback_data=f"pub_ph_{article_id}",
+                        "🌐 Publicar en web",
+                        callback_data=f"pub_tp_{article_id}",
                     ),
                     InlineKeyboardButton(
-                        "🌐 Publish to TP",
-                        callback_data=f"pub_tp_{article_id}",
+                        "📢 Canal",
+                        callback_data=f"pub_ch_{article_id}",
                     ),
                 ]
             ]
@@ -3161,17 +3375,42 @@ async def handle_publish_callback(
             await wait_msg.edit_text(f"❌ Error: {e}")
         return
 
-    # Publish to GitHub
+    # Channel post for non-blog content
+    if data.startswith("chpost_"):
+        post_id = data[7:]
+        post_info = pending_channel_posts.get(post_id)
+        if not post_info:
+            await query.answer("Content expired. Generate again.", show_alert=True)
+            return
+        await query.answer("Publicando en canal...")
+        try:
+            content_type = post_info["type"]
+            content_data = post_info["data"]
+            channel_text = format_content_for_channel(content_type, content_data)
+            ok = await post_to_channel(context.bot, channel_text)
+            original_text = query.message.text or ""
+            if ok:
+                new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
+            else:
+                new_text = original_text + "\n\n❌ Error al publicar en canal"
+            try:
+                await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                await query.edit_message_text(new_text[:TG_MAX_LEN])
+        except Exception as e:
+            logger.error(f"Channel post error: {e}")
+            await query.answer(f"Error: {e}", show_alert=True)
+        return
+
+    # Publish to channel or GitHub
     if data.startswith("pub_"):
-        parts = data.split("_", 2)  # pub, ph/tp, article_id
+        parts = data.split("_", 2)  # pub, ch/tp, article_id
         if len(parts) < 3:
             await query.answer("Invalid callback data", show_alert=True)
             return
 
-        target = parts[1]  # ph or tp
+        target = parts[1]  # ch or tp
         article_id = parts[2]
-        repo = GITHUB_REPO_PH if target == "ph" else GITHUB_REPO_TP
-        site_name = "PH-Site" if target == "ph" else "tuspapeles2026"
 
         article = pending_articles.get(article_id)
         if not article:
@@ -3180,6 +3419,30 @@ async def handle_publish_callback(
                 show_alert=True,
             )
             return
+
+        # Channel publish path
+        if target == "ch":
+            await query.answer("Publicando en canal...")
+            try:
+                channel_text = format_content_for_channel("blog", article)
+                ok = await post_to_channel(context.bot, channel_text)
+                original_text = query.message.text or ""
+                if ok:
+                    new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
+                else:
+                    new_text = original_text + "\n\n❌ Error al publicar en canal"
+                try:
+                    await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    await query.edit_message_text(new_text[:TG_MAX_LEN])
+            except Exception as e:
+                logger.error(f"Channel publish error: {e}")
+                await query.answer(f"Error: {e}", show_alert=True)
+            return
+
+        # Web publish path (tp only now)
+        repo = GITHUB_REPO_TP
+        site_name = "tuspapeles2026"
 
         if not GITHUB_TOKEN:
             await query.answer(
