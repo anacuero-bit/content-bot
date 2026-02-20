@@ -11,6 +11,19 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.3.0 (2026-02-20)
+  - ADD: Predis.ai API integration — generate branded carousels, images, and videos
+  - ADD: /predis_setup command — verify Predis connection, show brand info + credits
+  - ADD: /branded [topic] command — generate branded carousel via Claude + Predis AI
+  - ADD: /branded_image [topic] command — generate branded single image via Predis AI
+  - ADD: /branded_video [topic] command — generate branded short video via Predis AI
+  - ADD: /predis_posts command — list recent Predis-generated content with status
+  - ADD: Review queue — branded content previewed in Telegram with approve/reject
+  - ADD: "Brand It" button on /carousel output to render via Predis
+  - ADD: Auto-updater branded content — published articles also generate branded carousel
+  - ADD: PREDIS_API_KEY, PREDIS_BRAND_ID env vars
+  - ADD: Brand color injection (Deep Blue #1B3A5C, Gold #D4A843, White #FFFFFF)
+
 v3.2.0 (2026-02-20)
   - ADD: carousel_renderer.py — Pillow-based branded slide generator (1080x1350px)
   - ADD: Auto-render carousel slides as PNG images + MP4 video + PDF
@@ -160,6 +173,160 @@ GITHUB_REPO_PH = os.environ.get("GITHUB_REPO_PH", "anacuero-bit/PH-Site")
 GITHUB_REPO_TP = os.environ.get("GITHUB_REPO_TP", "anacuero-bit/tus-papeles-2026")
 TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", os.environ.get("TELEGRAM_CHANNEL", "@tuspapeles2026"))
 
+# ==============================================================================
+# PREDIS.AI API CLIENT
+# ==============================================================================
+
+PREDIS_BASE = "https://brain.predis.ai/predis_api/v1"
+PREDIS_API_KEY = os.getenv("PREDIS_API_KEY", "")
+PREDIS_BRAND_ID = os.getenv("PREDIS_BRAND_ID", "")
+
+# tuspapeles2026 brand details — injected into every Predis request
+TP26_BRAND_DETAILS = json.dumps({
+    "color_1": "1B3A5C",
+    "color_2": "D4A843",
+    "color_3": "FFFFFF",
+    "brand_website": "tuspapeles2026.es",
+    "brand_handle": "@tuspapeles2026",
+    "logo_url": "https://raw.githubusercontent.com/anacuero-bit/tus-papeles-2026/main/tp26sqlogo.jpg",
+})
+
+
+async def predis_create_content(
+    text: str,
+    media_type: str = "carousel",
+    model_version: str = "4",
+    n_posts: int = 1,
+    use_brand_palette: bool = True,
+) -> dict:
+    """Create branded content via Predis.ai API.
+
+    Args:
+        text: Topic/prompt text (min 20 chars, 3 words)
+        media_type: "single_image", "carousel", or "video"
+        model_version: "4" (best quality, carousel+image) or "2" (all types including video)
+        n_posts: Number of variations to generate (1-10)
+        use_brand_palette: If True, inject TP26 brand colors/logo
+
+    Returns:
+        dict with post_ids and post_status
+    """
+    payload = {
+        "brand_id": PREDIS_BRAND_ID,
+        "text": text,
+        "media_type": media_type,
+        "model_version": model_version if media_type != "video" else "2",
+        "n_posts": str(n_posts),
+        "input_language": "spanish",
+        "output_language": "spanish",
+        "color_palette_type": "brand",
+    }
+
+    # Inject brand details for consistent branding even without dashboard setup
+    if use_brand_palette:
+        payload["brand_details"] = TP26_BRAND_DETAILS
+
+    # Video-specific settings
+    if media_type == "video":
+        payload["video_duration"] = "short"
+        payload["model_version"] = "2"  # v4 doesn't support video
+
+    headers = {"Authorization": PREDIS_API_KEY}
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{PREDIS_BASE}/create_content/",
+            data=payload,
+            headers=headers,
+        )
+
+    if resp.status_code >= 400:
+        logger.error(f"Predis API error {resp.status_code}: {resp.text[:500]}")
+        return {"ok": False, "error": resp.text[:200], "status_code": resp.status_code}
+
+    result = resp.json()
+    result["ok"] = "post_ids" in result and len(result.get("post_ids", [])) > 0
+    return result
+
+
+async def predis_get_posts(page: int = 1) -> dict:
+    """Get all generated posts from Predis.ai."""
+    headers = {"Authorization": PREDIS_API_KEY}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{PREDIS_BASE}/get_posts/",
+            headers=headers,
+            params={"page": page},
+        )
+
+    if resp.status_code >= 400:
+        logger.error(f"Predis get_posts error {resp.status_code}: {resp.text[:500]}")
+        return {"ok": False, "error": resp.text[:200]}
+
+    result = resp.json()
+    result["ok"] = "posts" in result
+    return result
+
+
+async def predis_get_templates(media_type: str = None, page: int = 1) -> dict:
+    """Get available templates from Predis.ai."""
+    headers = {"Authorization": PREDIS_API_KEY}
+    params = {"page": page}
+    if media_type:
+        params["media_type"] = media_type
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{PREDIS_BASE}/get_templates/",
+            headers=headers,
+            params=params,
+        )
+
+    if resp.status_code >= 400:
+        return {"ok": False, "error": resp.text[:200]}
+
+    result = resp.json()
+    result["ok"] = "templates" in result
+    return result
+
+
+async def predis_poll_until_complete(post_id: str, max_wait: int = 90, interval: int = 5) -> dict:
+    """Poll Predis.ai until a specific post is completed or errors out.
+
+    Args:
+        post_id: The post ID to wait for
+        max_wait: Maximum seconds to wait
+        interval: Seconds between polls
+
+    Returns:
+        dict with post data including urls, caption, media_type
+        or {"ok": False, "error": "timeout"} if max_wait exceeded
+    """
+    elapsed = 0
+
+    while elapsed < max_wait:
+        await asyncio.sleep(interval)
+        elapsed += interval
+
+        result = await predis_get_posts(page=1)
+        if not result.get("ok"):
+            continue
+
+        for post in result.get("posts", []):
+            if post.get("post_id") == post_id:
+                # Check if post has URLs (means it's completed)
+                urls = post.get("urls", [])
+                if urls and len(urls) > 0:
+                    post["ok"] = True
+                    post["status"] = "completed"
+                    return post
+
+        logger.info(f"Predis poll: waiting for {post_id}... ({elapsed}s/{max_wait}s)")
+
+    return {"ok": False, "error": "timeout", "post_id": post_id}
+
+
 # Claude client
 claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
@@ -176,6 +343,15 @@ pending_articles: dict = {}
 
 # In-memory cache for channel publish buttons (non-blog content)
 pending_channel_posts: dict = {}
+
+# In-memory store for carousel text pending Predis rendering
+pending_branded: dict = {}
+
+# In-memory Predis review queue: {telegram_msg_id: {post_id, caption, media_urls, ...}}
+predis_review_queue: dict = {}
+
+PREDIS_APPROVE = "predis_approve"
+PREDIS_REJECT = "predis_reject"
 
 # Generation stats (resets on restart)
 gen_stats = {
@@ -1999,7 +2175,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /backfill — Publish 7 launch articles\n"
         "  /articles — List all published articles\n"
         "  /delete \\[slug|number\\] — Remove a published article\n"
-        "  /help — This message"
+        "  /help — This message\n\n"
+        "*Branded Content (Predis.ai):*\n"
+        "  /predis\\_setup — Check Predis connection \\+ config\n"
+        "  /branded \\<topic\\> — Branded carousel (Claude \\+ Predis)\n"
+        "  /branded\\_image \\<topic\\> — Branded single image\n"
+        "  /branded\\_video \\<topic\\> — Branded short video\n"
+        "  /predis\\_posts — List content in Predis library"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -2169,9 +2351,35 @@ async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         formatted = format_carousel_for_telegram(data)
         post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
         pending_channel_posts[post_id] = {"type": "carousel", "data": data}
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
-        ]])
+
+        # Build Brand It button (store carousel text for Predis rendering)
+        buttons_row = [
+            InlineKeyboardButton("\U0001f4e2 Publicar en canal", callback_data=f"chpost_{post_id}")
+        ]
+        if PREDIS_API_KEY and PREDIS_BRAND_ID:
+            carousel_topic_key = hashlib.md5(topic.encode()).hexdigest()[:16]
+            # Build plain text from carousel data for Predis
+            slides = data.get("slides", [])
+            text_parts = [data.get("topic", topic)]
+            for s in slides:
+                title = s.get("title", s.get("headline", ""))
+                if title:
+                    text_parts.append(title)
+                for b in s.get("bullets", []):
+                    text_parts.append(b)
+            carousel_plain_text = ". ".join(text_parts)
+            pending_branded[carousel_topic_key] = {
+                "text": carousel_plain_text,
+                "topic": topic,
+                "chat_id": update.effective_chat.id,
+            }
+            buttons_row.append(
+                InlineKeyboardButton(
+                    "\U0001f3a8 Brand It (Predis.ai)",
+                    callback_data=f"brand_it:{carousel_topic_key}",
+                )
+            )
+        markup = InlineKeyboardMarkup([buttons_row])
         await wait_msg.delete()
         await send_long_message(update, formatted, context, reply_markup=markup)
 
@@ -3299,6 +3507,621 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==============================================================================
+# PREDIS REVIEW QUEUE + BRANDED COMMANDS
+# ==============================================================================
+
+
+async def send_predis_to_review(
+    bot,
+    chat_id: int,
+    post_id: str,
+    caption: str,
+    media_urls: list,
+    media_type: str,
+    source: str = "manual",
+):
+    """Send Predis-generated content to review queue with preview + approve/reject buttons."""
+
+    item_count = len(media_urls)
+    type_label = {
+        "carousel": f"\U0001f4ca {item_count}-slide carousel",
+        "single_image": "\U0001f5bc Single image",
+        "video": "\U0001f3ac Short video",
+    }.get(media_type, f"\U0001f4e6 {media_type}")
+
+    preview_text = (
+        f"\U0001f4cb <b>PREDIS REVIEW</b> ({source})\n\n"
+        f"\U0001f4dd <b>Caption:</b>\n{caption[:300]}{'...' if len(caption) > 300 else ''}\n\n"
+        f"\U0001f3a8 <b>Content:</b> {type_label}\n"
+        f"\U0001f194 <b>Predis ID:</b> <code>{post_id}</code>\n\n"
+        f"Content is ready in your Predis.ai dashboard.\n"
+        f"Tap \u2705 to confirm (schedule from Predis dashboard),\n"
+        f"or \u274c to discard."
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(text="\u2705 Approve", callback_data=f"{PREDIS_APPROVE}:{post_id[:20]}"),
+            InlineKeyboardButton(text="\u274c Reject", callback_data=f"{PREDIS_REJECT}:{post_id[:20]}"),
+        ],
+        [
+            InlineKeyboardButton(text="\U0001f517 Open in Predis", url="https://predis.ai/app"),
+        ],
+    ])
+
+    # Send first image as preview if available
+    msg = None
+    if media_urls and media_type in ("carousel", "single_image"):
+        try:
+            msg = await bot.send_photo(
+                chat_id=chat_id,
+                photo=media_urls[0],
+                caption=preview_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send preview image: {e}")
+
+    if not msg:
+        msg = await bot.send_message(
+            chat_id=chat_id,
+            text=preview_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+
+    # Store in review queue
+    predis_review_queue[msg.message_id] = {
+        "post_id": post_id,
+        "caption": caption,
+        "media_urls": media_urls,
+        "media_type": media_type,
+        "source": source,
+        "chat_id": chat_id,
+    }
+
+    return msg
+
+
+async def handle_predis_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Predis review queue approve/reject callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    msg_id = query.message.message_id
+    data = query.data  # "predis_approve:postid" or "predis_reject:postid"
+
+    action = data.split(":")[0]
+
+    if msg_id not in predis_review_queue:
+        await query.edit_message_text("\u26a0\ufe0f This review item has expired (bot restarted).")
+        return
+
+    item = predis_review_queue.pop(msg_id)
+
+    if action == PREDIS_REJECT:
+        await query.edit_message_text(
+            f"\u274c <b>Rejected and discarded.</b>\n\n"
+            f"Source: {item['source']}\n"
+            f"Predis ID: <code>{item['post_id']}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if action == PREDIS_APPROVE:
+        await query.edit_message_text(
+            f"\u2705 <b>Approved!</b>\n\n"
+            f"Content is in your Predis.ai dashboard ready to schedule.\n\n"
+            f"\U0001f4cc <b>Next steps:</b>\n"
+            f"1. Open predis.ai/app\n"
+            f"2. Find this post in your content library\n"
+            f"3. Schedule or publish to connected accounts\n\n"
+            f"Predis ID: <code>{item['post_id']}</code>\n"
+            f"Source: {item['source']}\n"
+            f"Media: {len(item['media_urls'])} file(s)",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@team_only
+async def cmd_predis_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verify Predis.ai API connection and show configuration."""
+    if not PREDIS_API_KEY:
+        await update.message.reply_text(
+            "\u274c <b>PREDIS_API_KEY not set.</b>\n\n"
+            "1. Sign up at predis.ai (Rise plan for auto-posting)\n"
+            "2. Go to Pricing & Account \u2192 Rest API\n"
+            "3. Generate your API key\n"
+            "4. Add PREDIS_API_KEY to Railway env vars\n"
+            "5. Restart the bot",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if not PREDIS_BRAND_ID:
+        await update.message.reply_text(
+            "\u274c <b>PREDIS_BRAND_ID not set.</b>\n\n"
+            "1. Go to predis.ai \u2192 Manage Brand\n"
+            "2. Set up your brand:\n"
+            "   \u2022 Name: tuspapeles2026\n"
+            "   \u2022 Logo: upload tp26sqlogo.jpg\n"
+            "   \u2022 Color 1: #1B3A5C (Deep Blue)\n"
+            "   \u2022 Color 2: #D4A843 (Gold)\n"
+            "   \u2022 Color 3: #FFFFFF (White)\n"
+            "   \u2022 Website: tuspapeles2026.es\n"
+            "3. Go to Pricing & Account \u2192 Brands\n"
+            "4. Copy your Brand ID\n"
+            "5. Add PREDIS_BRAND_ID to Railway env vars\n"
+            "6. Restart the bot",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    status_msg = await update.message.reply_text("\U0001f504 Checking Predis.ai connection...")
+
+    # Test API by fetching posts (lightweight check)
+    result = await predis_get_posts(page=1)
+
+    if not result.get("ok"):
+        error = result.get("error", "Unknown error")
+        await status_msg.edit_text(
+            f"\u274c <b>Predis API error:</b>\n<code>{error}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    post_count = len(result.get("posts", []))
+    total_pages = result.get("total_pages", 0)
+
+    lines = [
+        "\u2705 <b>Predis.ai Connected!</b>\n",
+        f"\U0001f194 <b>Brand ID:</b> <code>{PREDIS_BRAND_ID[:12]}...</code>",
+        f"\U0001f4dd <b>Posts in library:</b> {post_count} (page 1 of {total_pages})",
+        "",
+        "\U0001f3a8 <b>Brand Config (injected per request):</b>",
+        "  \U0001f535 Color 1: #1B3A5C (Deep Blue)",
+        "  \U0001f7e1 Color 2: #D4A843 (Gold)",
+        "  \u26aa Color 3: #FFFFFF (White)",
+        "  \U0001f310 Website: tuspapeles2026.es",
+        "  \U0001f4f1 Handle: @tuspapeles2026",
+        "",
+        "\U0001f4a1 <b>Also set up in Predis dashboard:</b>",
+        "  \u2022 Upload logo (tp26sqlogo.jpg)",
+        "  \u2022 Set brand colors in Manage Brand",
+        "  \u2022 Connect social accounts (IG/TikTok/YT/FB)",
+        "  \u2022 Enable auto-posting (Rise plan feature)",
+        "",
+        "Ready! Try: <code>/branded regularizaci\u00f3n 2026 requisitos</code>",
+    ]
+
+    await status_msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+@team_only
+async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate branded carousel via Claude + Predis.ai. Usage: /branded <topic>"""
+    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
+        return
+
+    topic = " ".join(context.args) if context.args else None
+    if not topic:
+        await update.message.reply_text(
+            "Usage: <code>/branded &lt;topic&gt;</code>\n\n"
+            "Examples:\n"
+            "  <code>/branded 5 meses no a\u00f1os para la regularizaci\u00f3n</code>\n"
+            "  <code>/branded documentos que sirven como prueba de residencia</code>\n"
+            "  <code>/branded mitos sobre la regularizaci\u00f3n 2026</code>\n"
+            "  <code>/branded comparaci\u00f3n 2005 vs 2026</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    status_msg = await update.message.reply_text("\U0001f9e0 Generating content with Claude...")
+
+    try:
+        # Step 1: Claude generates carousel text in Spanish
+        carousel_prompt = (
+            f"Write a 6-slide educational carousel about: {topic}\n\n"
+            f"Context: Spain's 2026 extraordinary regularization for undocumented immigrants.\n"
+            f"Language: Spanish (Spain) \u2014 use European Spanish, not Latin American.\n"
+            f"Tone: warm, empathetic, professional, trustworthy.\n\n"
+            f"CRITICAL LEGAL FACTS \u2014 use these exactly:\n"
+            f"- Requirement: 5 MONTHS continuous residence in Spain (NOT years)\n"
+            f"- Entry before: December 31, 2025\n"
+            f"- NO job offer required (vulnerability clause eliminates this)\n"
+            f"- Application window: April 1 \u2013 June 30, 2026\n"
+            f"- 100% online submission, no office visits needed\n"
+            f"- Provisional work permit granted IMMEDIATELY upon filing\n"
+            f"- Expected approval rate: 80-90% based on 2005 precedent\n"
+            f"- ALL nationalities eligible, not just Latin American\n"
+            f"- Cost with tuspapeles2026: \u20ac199 (prepay) vs \u20ac350-450 elsewhere\n\n"
+            f"Format: Return a single text block (NOT JSON) that covers the topic across "
+            f"6 logical sections. Each section should have a clear heading and 2-3 sentences. "
+            f"End with a call to action mentioning tuspapeles2026.es.\n"
+            f"Keep it educational and factual. No hype, no false promises."
+        )
+
+        response = await asyncio.to_thread(
+            claude.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=1200,
+            messages=[{"role": "user", "content": carousel_prompt}],
+        )
+
+        carousel_text = response.content[0].text.strip()
+
+        if len(carousel_text) < 50:
+            await status_msg.edit_text("\u274c Claude returned too little text. Try a different topic.")
+            return
+
+        await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
+
+        # Step 2: Send to Predis.ai for branded rendering
+        predis_result = await predis_create_content(
+            text=carousel_text,
+            media_type="carousel",
+            model_version="4",
+            n_posts=1,
+            use_brand_palette=True,
+        )
+
+        if not predis_result.get("ok"):
+            error = predis_result.get("error", predis_result.get("errors", "Unknown error"))
+            await status_msg.edit_text(
+                f"\u274c <b>Predis API error:</b>\n<code>{str(error)[:300]}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        post_ids = predis_result.get("post_ids", [])
+        if not post_ids:
+            await status_msg.edit_text("\u274c No post ID returned from Predis.")
+            return
+
+        post_id = post_ids[0]
+        await status_msg.edit_text(
+            f"\u23f3 Rendering... (ID: <code>{post_id[:12]}</code>)\n"
+            f"This takes 15-60 seconds.",
+            parse_mode=ParseMode.HTML,
+        )
+
+        # Step 3: Poll until completed
+        completed = await predis_poll_until_complete(post_id, max_wait=90, interval=5)
+
+        if not completed.get("ok"):
+            error = completed.get("error", "Unknown")
+            await status_msg.edit_text(
+                f"\u26a0\ufe0f <b>Render timed out or failed.</b>\n\n"
+                f"Predis ID: <code>{post_id}</code>\n"
+                f"Error: {error}\n\n"
+                f"Check predis.ai/app for the content \u2014 it may still be processing.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        # Step 4: Get media URLs and caption
+        media_urls = completed.get("urls", [])
+
+        if not media_urls:
+            await status_msg.edit_text(
+                f"\u26a0\ufe0f Render completed but no media URLs returned.\n"
+                f"Check predis.ai/app for Predis ID: <code>{post_id}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        await status_msg.edit_text(
+            f"\u2705 {len(media_urls)} slides rendered! Sending to review..."
+        )
+
+        # Step 5: Build social caption with hashtags
+        social_caption = (
+            f"\U0001f4cb {topic}\n\n"
+            f"La regularizaci\u00f3n 2026 abre en abril. "
+            f"\u00bfCumples los requisitos? Verif\u00edcalo gratis.\n\n"
+            f"\U0001f449 Link en bio \u2192 tuspapeles2026.es\n\n"
+            f"#regularizacion2026 #papeles2026 #sinpapeles #regularizacion "
+            f"#extranjerosEspa\u00f1a #inmigrantes #residenciaEspa\u00f1a #tuspapeles "
+            f"#regularizacionextraordinaria #decretoderegularizacion"
+        )
+
+        # Step 6: Send to review queue
+        await send_predis_to_review(
+            bot=context.bot,
+            chat_id=chat_id,
+            post_id=post_id,
+            caption=social_caption,
+            media_urls=media_urls,
+            media_type="carousel",
+            source=f"branded: {topic[:50]}",
+        )
+
+        # Also send the raw Claude text for reference
+        await update.message.reply_text(
+            f"\U0001f4c4 <b>Generated text (for reference):</b>\n\n"
+            f"{carousel_text[:1500]}{'...' if len(carousel_text) > 1500 else ''}",
+            parse_mode=ParseMode.HTML,
+        )
+
+    except Exception as e:
+        logger.error(f"Branded carousel error: {e}", exc_info=True)
+        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
+
+
+@team_only
+async def cmd_branded_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate branded single image via Claude + Predis.ai. Usage: /branded_image <topic>"""
+    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
+        return
+
+    topic = " ".join(context.args) if context.args else None
+    if not topic:
+        await update.message.reply_text(
+            "Usage: <code>/branded_image &lt;topic&gt;</code>\n\n"
+            "Generates a single branded image post for Instagram/Facebook.\n\n"
+            "Example: <code>/branded_image dato clave: 5 meses no a\u00f1os</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    status_msg = await update.message.reply_text("\U0001f3a8 Generating branded image...")
+
+    try:
+        predis_text = (
+            f"{topic}. Regularizaci\u00f3n 2026 en Espa\u00f1a. "
+            f"Requisitos: 5 meses de residencia continuada, sin oferta de empleo. "
+            f"Ventana: abril a junio 2026. tuspapeles2026.es"
+        )
+
+        predis_result = await predis_create_content(
+            text=predis_text,
+            media_type="single_image",
+            model_version="4",
+            n_posts=1,
+            use_brand_palette=True,
+        )
+
+        if not predis_result.get("ok"):
+            error = predis_result.get("error", predis_result.get("errors", "Unknown"))
+            await status_msg.edit_text(f"\u274c Predis error: {str(error)[:300]}")
+            return
+
+        post_id = predis_result.get("post_ids", [""])[0]
+        await status_msg.edit_text(f"\u23f3 Rendering image... ({post_id[:12]})")
+
+        completed = await predis_poll_until_complete(post_id, max_wait=60, interval=4)
+
+        if not completed.get("ok"):
+            await status_msg.edit_text("\u26a0\ufe0f Render timed out. Check predis.ai/app")
+            return
+
+        media_urls = completed.get("urls", [])
+        caption = (
+            f"{topic}\n\n"
+            f"\U0001f449 tuspapeles2026.es\n\n"
+            f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
+        )
+
+        await send_predis_to_review(
+            bot=context.bot,
+            chat_id=chat_id,
+            post_id=post_id,
+            caption=caption,
+            media_urls=media_urls,
+            media_type="single_image",
+            source=f"branded_image: {topic[:40]}",
+        )
+
+    except Exception as e:
+        logger.error(f"Branded image error: {e}", exc_info=True)
+        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
+
+
+@team_only
+async def cmd_branded_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate branded short video via Predis.ai. Usage: /branded_video <topic>"""
+    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
+        return
+
+    topic = " ".join(context.args) if context.args else None
+    if not topic:
+        await update.message.reply_text(
+            "Usage: <code>/branded_video &lt;topic&gt;</code>\n\n"
+            "Generates a branded short video for TikTok/Reels.\n"
+            "\u26a0\ufe0f Uses model v2 (video not supported on v4). Quality may vary.\n\n"
+            "Example: <code>/branded_video 3 mitos sobre la regularizaci\u00f3n</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    status_msg = await update.message.reply_text("\U0001f3ac Generating branded video (this takes longer)...")
+
+    try:
+        predis_text = (
+            f"{topic}. Regularizaci\u00f3n extraordinaria 2026 en Espa\u00f1a. "
+            f"5 meses de residencia, sin oferta de empleo, 100% online. "
+            f"tuspapeles2026.es"
+        )
+
+        predis_result = await predis_create_content(
+            text=predis_text,
+            media_type="video",
+            model_version="2",  # v4 doesn't support video
+            n_posts=1,
+            use_brand_palette=True,
+        )
+
+        if not predis_result.get("ok"):
+            error = predis_result.get("error", predis_result.get("errors", "Unknown"))
+            await status_msg.edit_text(f"\u274c Predis error: {str(error)[:300]}")
+            return
+
+        post_id = predis_result.get("post_ids", [""])[0]
+        await status_msg.edit_text("\u23f3 Rendering video... (may take 60-120s)")
+
+        # Videos take longer to render
+        completed = await predis_poll_until_complete(post_id, max_wait=120, interval=8)
+
+        if not completed.get("ok"):
+            await status_msg.edit_text(
+                f"\u26a0\ufe0f Video render timed out.\n"
+                f"Check predis.ai/app \u2014 ID: <code>{post_id}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        media_urls = completed.get("urls", [])
+        caption = (
+            f"{topic}\n\n"
+            f"La regularizaci\u00f3n 2026 abre en abril. "
+            f"\u00bfCumples los requisitos? Verif\u00edcalo gratis.\n\n"
+            f"\U0001f449 Link en bio \u2192 tuspapeles2026.es\n\n"
+            f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
+        )
+
+        await send_predis_to_review(
+            bot=context.bot,
+            chat_id=chat_id,
+            post_id=post_id,
+            caption=caption,
+            media_urls=media_urls,
+            media_type="video",
+            source=f"branded_video: {topic[:40]}",
+        )
+
+    except Exception as e:
+        logger.error(f"Branded video error: {e}", exc_info=True)
+        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
+
+
+@team_only
+async def cmd_predis_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List recent Predis.ai generated content."""
+    if not PREDIS_API_KEY:
+        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
+        return
+
+    await update.message.reply_text("\U0001f4cb Fetching Predis content library...")
+
+    result = await predis_get_posts(page=1)
+    if not result.get("ok"):
+        await update.message.reply_text(f"\u274c Error: {result.get('error', 'Unknown')}")
+        return
+
+    posts = result.get("posts", [])
+    total_pages = result.get("total_pages", 0)
+
+    if not posts:
+        await update.message.reply_text("\U0001f4ed No posts in Predis library yet. Try /branded <topic>")
+        return
+
+    lines = [f"\U0001f4cb <b>Predis Content Library</b> (page 1/{total_pages})\n"]
+
+    for i, post in enumerate(posts[:10], 1):
+        post_id = post.get("post_id", "?")[:10]
+        media_type = post.get("media_type", "?")
+        caption = post.get("caption", "No caption")[:50]
+        urls = post.get("urls", [])
+        url_count = len(urls)
+
+        type_emoji = {
+            "carousel": "\U0001f4ca",
+            "single_image": "\U0001f5bc",
+            "video": "\U0001f3ac",
+        }.get(media_type, "\U0001f4e6")
+
+        lines.append(
+            f"{i}. {type_emoji} <code>{post_id}...</code> \u2014 {media_type} ({url_count} files)\n"
+            f"   {caption}..."
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def handle_brand_it(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Brand It' button \u2014 sends existing carousel text to Predis for rendering."""
+    query = update.callback_query
+    await query.answer()
+
+    key = query.data.replace("brand_it:", "")
+
+    if key not in pending_branded:
+        await query.edit_message_text(
+            query.message.text + "\n\n\u26a0\ufe0f Carousel text expired (bot restarted)."
+        )
+        return
+
+    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+        await query.edit_message_text(
+            query.message.text + "\n\n\u274c Predis not configured. Run /predis_setup"
+        )
+        return
+
+    item = pending_branded.pop(key)
+    chat_id = item["chat_id"]
+    text = item["text"]
+    topic = item["topic"]
+
+    status_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="\U0001f3a8 Rendering branded carousel via Predis.ai...",
+    )
+
+    try:
+        predis_result = await predis_create_content(
+            text=text,
+            media_type="carousel",
+            model_version="4",
+            n_posts=1,
+            use_brand_palette=True,
+        )
+
+        if not predis_result.get("ok"):
+            error = predis_result.get("error", predis_result.get("errors", "Unknown"))
+            await status_msg.edit_text(f"\u274c Predis error: {str(error)[:300]}")
+            return
+
+        post_id = predis_result.get("post_ids", [""])[0]
+        await status_msg.edit_text(f"\u23f3 Rendering... ({post_id[:12]})")
+
+        completed = await predis_poll_until_complete(post_id, max_wait=90, interval=5)
+
+        if not completed.get("ok"):
+            await status_msg.edit_text("\u26a0\ufe0f Timed out. Check predis.ai/app")
+            return
+
+        media_urls = completed.get("urls", [])
+        caption = (
+            f"\U0001f4cb {topic}\n\n"
+            f"La regularizaci\u00f3n 2026 abre en abril. "
+            f"\u00bfCumples los requisitos? Verif\u00edcalo gratis.\n\n"
+            f"\U0001f449 Link en bio \u2192 tuspapeles2026.es\n\n"
+            f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
+        )
+
+        await send_predis_to_review(
+            bot=context.bot,
+            chat_id=chat_id,
+            post_id=post_id,
+            caption=caption,
+            media_urls=media_urls,
+            media_type="carousel",
+            source=f"brand_it: {topic[:40]}",
+        )
+
+    except Exception as e:
+        logger.error(f"Brand It error: {e}", exc_info=True)
+        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
+
+
+# ==============================================================================
 # CALLBACK HANDLERS
 # ==============================================================================
 
@@ -3669,9 +4492,58 @@ async def handle_publish_callback(
                 if estado_ok:
                     index_status += " + Estado updated"
 
+                # Auto-generate branded carousel via Predis after publish
+                if PREDIS_API_KEY and PREDIS_BRAND_ID:
+                    try:
+                        predis_text = (
+                            f"{title}. "
+                            f"Regularizaci\u00f3n extraordinaria 2026 en Espa\u00f1a. "
+                            f"Requisitos: 5 meses de residencia continuada, sin necesidad de oferta de empleo. "
+                            f"Ventana de solicitud: 1 abril \u2013 30 junio 2026. 100% online. "
+                            f"tuspapeles2026.es"
+                        )
+                        predis_result = await predis_create_content(
+                            text=predis_text,
+                            media_type="carousel",
+                            model_version="4",
+                            n_posts=1,
+                            use_brand_palette=True,
+                        )
+                        if predis_result.get("ok"):
+                            p_id = predis_result["post_ids"][0]
+                            completed = await predis_poll_until_complete(p_id, max_wait=90, interval=5)
+                            if completed.get("ok"):
+                                p_urls = completed.get("urls", [])
+                                p_caption = (
+                                    f"\U0001f4f0 {title}\n\n"
+                                    f"Lee el art\u00edculo completo en tuspapeles2026.es/informacion\n\n"
+                                    f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
+                                )
+                                for team_cid in TEAM_CHAT_IDS:
+                                    try:
+                                        await send_predis_to_review(
+                                            bot=context.bot,
+                                            chat_id=team_cid,
+                                            post_id=p_id,
+                                            caption=p_caption,
+                                            media_urls=p_urls,
+                                            media_type="carousel",
+                                            source=f"auto: {title[:40]}",
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to send review to {team_cid}: {e}")
+                                index_status += " + Predis carousel queued"
+                                logger.info(f"Auto branded carousel queued for review \u2014 {title}")
+                            else:
+                                logger.warning(f"Predis render timed out for {title}")
+                        else:
+                            logger.warning(f"Predis create failed: {predis_result}")
+                    except Exception as e:
+                        logger.error(f"Auto Predis error: {e}")
+
                 # Update the message to show success
                 original_text = query.message.text or ""
-                new_text = original_text + f"\n\n✅ Published to {site_name}!{index_status}"
+                new_text = original_text + f"\n\n\u2705 Published to {site_name}!{index_status}"
                 try:
                     await query.edit_message_text(
                         new_text[:TG_MAX_LEN],
@@ -3745,6 +4617,17 @@ def main():
     app.add_handler(CommandHandler("backfill", cmd_backfill))
     app.add_handler(CommandHandler("articles", cmd_articles))
     app.add_handler(CommandHandler("delete", cmd_delete))
+
+    # Predis.ai branded content commands
+    app.add_handler(CommandHandler("predis_setup", cmd_predis_setup))
+    app.add_handler(CommandHandler("branded", cmd_branded))
+    app.add_handler(CommandHandler("branded_image", cmd_branded_image))
+    app.add_handler(CommandHandler("branded_video", cmd_branded_video))
+    app.add_handler(CommandHandler("predis_posts", cmd_predis_posts))
+
+    # Predis review queue + Brand It callbacks (BEFORE catch-all)
+    app.add_handler(CallbackQueryHandler(handle_predis_review, pattern=f"^({PREDIS_APPROVE}|{PREDIS_REJECT}):"))
+    app.add_handler(CallbackQueryHandler(handle_brand_it, pattern="^brand_it:"))
 
     # Callback handlers (publish buttons, weekly confirm, blog topic selection)
     app.add_handler(CallbackQueryHandler(handle_publish_callback))
