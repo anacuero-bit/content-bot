@@ -11,7 +11,8 @@ import base64
 import hashlib
 import re
 import html as html_mod
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from time import mktime
 
 import httpx
 import feedparser
@@ -73,16 +74,58 @@ def save_state(state, sha=None):
     return resp.status_code in (200, 201)
 
 
+def resolve_google_news_url(google_url: str) -> str:
+    """Extract the real article URL from a Google News RSS redirect link."""
+    if "news.google.com" not in google_url:
+        return google_url
+    try:
+        resp = httpx.get(
+            google_url, follow_redirects=True, timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code == 200 and "news.google.com" not in str(resp.url):
+            return str(resp.url)
+    except Exception:
+        pass
+    try:
+        path = google_url.split("/articles/")[-1].split("?")[0]
+        decoded = base64.urlsafe_b64decode(path + "==").decode("utf-8", errors="ignore")
+        http_pos = decoded.find("http")
+        if http_pos >= 0:
+            url = decoded[http_pos:]
+            for end_char in ['"', "'", " ", "\n", "\x00"]:
+                end_pos = url.find(end_char)
+                if end_pos > 0:
+                    url = url[:end_pos]
+            return url
+    except Exception:
+        pass
+    return google_url
+
+
 def fetch_headlines():
-    """Fetch headlines from RSS feeds."""
+    """Fetch headlines from RSS feeds. Only items from last 24 hours."""
     headlines = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
     for source in NEWS_SOURCES:
         try:
             feed = feedparser.parse(source)
             for entry in feed.entries[:8]:
+                # 24-hour filter
+                pub_parsed = getattr(entry, "published_parsed", None)
+                if pub_parsed:
+                    try:
+                        pub_dt = datetime.fromtimestamp(mktime(pub_parsed), tz=timezone.utc)
+                        if pub_dt < cutoff:
+                            continue
+                    except Exception:
+                        pass
+
+                link = resolve_google_news_url(getattr(entry, "link", ""))
                 headlines.append({
                     "title": entry.title.strip(),
-                    "link": getattr(entry, "link", ""),
+                    "link": link,
                     "summary": getattr(entry, "summary", "")[:300],
                     "hash": hashlib.md5(entry.title.strip().lower()[:80].encode()).hexdigest(),
                 })
