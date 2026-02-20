@@ -11,6 +11,14 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.2.0 (2026-02-20)
+  - ADD: carousel_renderer.py — Pillow-based branded slide generator (1080x1350px)
+  - ADD: Auto-render carousel slides as PNG images + MP4 video + PDF
+  - ADD: Send rendered media group + video + PDF in Telegram after /carousel
+  - ADD: Logo auto-download from GitHub at startup (ensure_logos)
+  - ADD: nixpacks.toml for ffmpeg + fonts-dejavu-core system packages
+  - ADD: Pillow + numpy to requirements.txt
+
 v3.1.1 (2026-02-20)
   - FIX: Channel publish — CHANNEL_ID from env, return error detail to user
   - FIX: Google News RSS links — resolve redirect URLs to real article URLs
@@ -121,7 +129,7 @@ import anthropic
 import httpx
 import feedparser
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -189,6 +197,29 @@ NEWS_SCAN_SOURCES = [
 
 # In-memory set of seen headline keys (resets on restart)
 seen_headlines: set = set()
+
+# Logo directory for carousel rendering
+LOGO_DIR = "/tmp/tp26_logos"
+os.makedirs(LOGO_DIR, exist_ok=True)
+
+
+async def ensure_logos():
+    """Download brand logos from GitHub if not already cached."""
+    for name in ["tp2026.png", "tp26sqlogo.png"]:
+        path = os.path.join(LOGO_DIR, name)
+        if not os.path.exists(path):
+            url = f"https://raw.githubusercontent.com/anacuero-bit/tus-papeles-2026/main/{name}"
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        with open(path, "wb") as f:
+                            f.write(resp.content)
+                        logger.info(f"Downloaded logo: {name}")
+                    else:
+                        logger.warning(f"Logo download failed ({resp.status_code}): {name}")
+            except Exception as e:
+                logger.warning(f"Logo download error for {name}: {e}")
 
 
 # ==============================================================================
@@ -2085,6 +2116,48 @@ async def cmd_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ Error generating TikTok: {e}")
 
 
+async def _send_carousel_media(chat_id: int, carousel_data: dict, context: ContextTypes.DEFAULT_TYPE):
+    """Render and send carousel slides as images, video, and PDF."""
+    from carousel_renderer import render_carousel
+
+    logo_wide = os.path.join(LOGO_DIR, "tp2026.png")
+    logo_sq = os.path.join(LOGO_DIR, "tp26sqlogo.png")
+
+    slide_pngs, mp4_bytes, pdf_bytes = await asyncio.to_thread(
+        render_carousel, carousel_data, logo_wide, logo_sq
+    )
+
+    topic_short = carousel_data.get("topic", "carousel")[:30]
+
+    # Send slides as media group (Telegram max 10 per group)
+    if slide_pngs:
+        media = []
+        for i, png in enumerate(slide_pngs[:10]):
+            buf = io.BytesIO(png)
+            buf.name = f"slide_{i + 1:02d}.png"
+            media.append(InputMediaPhoto(media=buf))
+        await context.bot.send_media_group(chat_id=chat_id, media=media)
+
+    # Send MP4 video
+    if mp4_bytes:
+        mp4_buf = io.BytesIO(mp4_bytes)
+        mp4_buf.name = f"carousel-{topic_short}.mp4"
+        await context.bot.send_video(
+            chat_id=chat_id, video=mp4_buf,
+            caption="Video listo para Reels/TikTok/Stories",
+            supports_streaming=True,
+        )
+
+    # Send PDF
+    if pdf_bytes:
+        pdf_buf = io.BytesIO(pdf_bytes)
+        pdf_buf.name = f"carousel-{topic_short}.pdf"
+        await context.bot.send_document(
+            chat_id=chat_id, document=pdf_buf,
+            caption="PDF para compartir por WhatsApp",
+        )
+
+
 @team_only
 async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /carousel [topic] command."""
@@ -2101,6 +2174,16 @@ async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]])
         await wait_msg.delete()
         await send_long_message(update, formatted, context, reply_markup=markup)
+
+        # Render and send images/video/PDF
+        try:
+            await _send_carousel_media(update.effective_chat.id, data, context)
+        except Exception as e:
+            logger.error(f"Carousel render failed: {e}")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"⚠️ Imágenes no generadas: {e}\nTexto disponible arriba.",
+            )
     except Exception as e:
         await wait_msg.edit_text(f"❌ Error generating carousel: {e}")
 
@@ -2274,6 +2357,18 @@ async def _batch_generate(
                 context,
                 reply_markup=reply_markup,
             )
+
+            # Render carousel images/video/PDF
+            if content_type == "carousel":
+                try:
+                    await _send_carousel_media(chat_id, data, context)
+                except Exception as render_err:
+                    logger.error(f"Carousel render failed: {render_err}")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⚠️ Imágenes no generadas: {render_err}",
+                    )
+
             success_count += 1
 
         except Exception as e:
@@ -3661,7 +3756,7 @@ def main():
     scheduler = AsyncIOScheduler(timezone="Europe/Madrid")
 
     async def post_init(application):
-        """Start the scheduler after the application is initialized."""
+        """Start the scheduler and download logos after the application is initialized."""
         scheduler.add_job(
             auto_scan_news,
             "cron",
@@ -3670,6 +3765,8 @@ def main():
         )
         scheduler.start()
         logger.info("News auto-scan scheduler started (every 6h Madrid time)")
+        await ensure_logos()
+        logger.info("Logo download check complete")
 
     app.post_init = post_init
 
