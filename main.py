@@ -11,6 +11,14 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v3.1.1 (2026-02-20)
+  - FIX: Channel publish — CHANNEL_ID from env, return error detail to user
+  - FIX: Google News RSS links — resolve redirect URLs to real article URLs
+  - ADD: resolve_google_news_url() helper (httpx follow_redirects + base64 fallback)
+  - ADD: 24-hour filter on RSS news scanner — skip items older than 24h
+  - ADD: Clickable source link in news alert messages
+  - UPD: auto_update.py — same URL resolution + 24h filter
+
 v3.1.0 (2026-02-18)
   - ADD: Telegram channel publishing to @tuspapeles2026
   - ADD: post_to_channel() function for sending content to channel
@@ -142,7 +150,7 @@ TEAM_CHAT_IDS = [
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_PH = os.environ.get("GITHUB_REPO_PH", "anacuero-bit/PH-Site")
 GITHUB_REPO_TP = os.environ.get("GITHUB_REPO_TP", "anacuero-bit/tus-papeles-2026")
-TELEGRAM_CHANNEL = "@tuspapeles2026"
+TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", os.environ.get("TELEGRAM_CHANNEL", "@tuspapeles2026"))
 
 # Claude client
 claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
@@ -845,27 +853,33 @@ async def publish_to_github(
             return False
 
 
-async def post_to_channel(bot, text: str, parse_mode=ParseMode.MARKDOWN) -> bool:
-    """Post a message to the Telegram channel. Returns True on success."""
+async def post_to_channel(bot, text: str, parse_mode=ParseMode.MARKDOWN) -> tuple:
+    """Post a message to the Telegram channel.
+
+    Returns (True, "") on success or (False, error_detail) on failure.
+    """
+    if not TELEGRAM_CHANNEL:
+        return False, "CHANNEL_ID not configured in environment variables"
     try:
         await bot.send_message(
             chat_id=TELEGRAM_CHANNEL,
             text=text[:TG_MAX_LEN],
             parse_mode=parse_mode,
+            disable_web_page_preview=False,
         )
-        return True
+        return True, ""
     except Exception as e:
-        logger.error(f"Channel post failed: {e}")
-        # Retry without parse_mode
+        logger.error(f"Channel post failed (parse_mode={parse_mode}): {e}")
+        # Retry without parse_mode in case of markdown issues
         try:
             await bot.send_message(
                 chat_id=TELEGRAM_CHANNEL,
                 text=text[:TG_MAX_LEN],
             )
-            return True
+            return True, ""
         except Exception as e2:
             logger.error(f"Channel post retry failed: {e2}")
-            return False
+            return False, str(e2)
 
 
 def detect_blog_category(title: str, topic: str = "") -> str:
@@ -1416,6 +1430,36 @@ NEWS_SOURCES = [
 ]
 
 
+def resolve_google_news_url(google_url: str) -> str:
+    """Extract the real article URL from a Google News RSS redirect link."""
+    if "news.google.com" not in google_url:
+        return google_url
+    try:
+        resp = httpx.get(
+            google_url, follow_redirects=True, timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code == 200 and "news.google.com" not in str(resp.url):
+            return str(resp.url)
+    except Exception:
+        pass
+    # Fallback: try to decode base64 from the URL path
+    try:
+        path = google_url.split("/articles/")[-1].split("?")[0]
+        decoded = base64.urlsafe_b64decode(path + "==").decode("utf-8", errors="ignore")
+        http_pos = decoded.find("http")
+        if http_pos >= 0:
+            url = decoded[http_pos:]
+            for end_char in ['"', "'", " ", "\n", "\x00"]:
+                end_pos = url.find(end_char)
+                if end_pos > 0:
+                    url = url[:end_pos]
+            return url
+    except Exception:
+        pass
+    return google_url
+
+
 async def fetch_news() -> list:
     """Fetch latest regularización news from RSS feeds and web sources."""
     articles = []
@@ -1428,9 +1472,10 @@ async def fetch_news() -> list:
                     source_title = source["name"]
                     if hasattr(entry, "source") and hasattr(entry.source, "title"):
                         source_title = entry.source.title
+                    link = await asyncio.to_thread(resolve_google_news_url, entry.link)
                     articles.append({
                         "title": entry.title,
-                        "link": entry.link,
+                        "link": link,
                         "source": source_title,
                         "published": getattr(entry, "published", ""),
                         "summary": getattr(entry, "summary", "")[:200],
@@ -3057,19 +3102,39 @@ async def auto_scan_news(bot=None):
     """Scheduled scan for new regularización news. Alerts team on new items."""
     new_items = []
 
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
     for source_url in NEWS_SCAN_SOURCES:
         try:
             feed = await asyncio.to_thread(feedparser.parse, source_url)
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:8]:
                 headline_key = entry.title.strip().lower()[:100]
-                if headline_key not in seen_headlines:
-                    new_items.append({
-                        "title": entry.title,
-                        "link": entry.link,
-                        "date": getattr(entry, "published", ""),
-                        "summary": getattr(entry, "summary", "")[:200],
-                    })
-                    seen_headlines.add(headline_key)
+                if headline_key in seen_headlines:
+                    continue
+
+                # 24-hour filter: skip items older than 24h
+                published_str = getattr(entry, "published", "")
+                pub_parsed = getattr(entry, "published_parsed", None)
+                if pub_parsed:
+                    try:
+                        from time import mktime
+                        pub_dt = datetime.fromtimestamp(mktime(pub_parsed), tz=timezone.utc)
+                        if pub_dt < cutoff:
+                            seen_headlines.add(headline_key)
+                            continue
+                    except Exception:
+                        pass
+
+                # Resolve Google News redirect URLs
+                link = await asyncio.to_thread(resolve_google_news_url, entry.link)
+
+                new_items.append({
+                    "title": entry.title,
+                    "link": link,
+                    "date": published_str,
+                    "summary": getattr(entry, "summary", "")[:200],
+                })
+                seen_headlines.add(headline_key)
         except Exception as e:
             logger.error(f"Auto-scan error for {source_url}: {e}")
 
@@ -3092,6 +3157,7 @@ async def auto_scan_news(bot=None):
             f"📰 {escape_md(item['title'])}\n"
             f"📅 {escape_md(item['date'])}\n\n"
             f"{escape_md(item['summary'])}\n\n"
+            f"🔗 [Ver fuente]({item['link']})\n\n"
             f"¿Generar contenido sobre esto?"
         )
         buttons = [
@@ -3328,12 +3394,12 @@ async def handle_publish_callback(
                 f"Más info en tuspapeles2026.es\n\n"
                 f"@tuspapeles2026"
             )
-            ok = await post_to_channel(context.bot, channel_text)
+            ok, err = await post_to_channel(context.bot, channel_text)
             original_text = query.message.text or ""
             if ok:
                 new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
             else:
-                new_text = original_text + "\n\n❌ Error al publicar en canal"
+                new_text = original_text + f"\n\n❌ Error al publicar en canal: {err}"
             try:
                 await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
             except Exception:
@@ -3387,12 +3453,12 @@ async def handle_publish_callback(
             content_type = post_info["type"]
             content_data = post_info["data"]
             channel_text = format_content_for_channel(content_type, content_data)
-            ok = await post_to_channel(context.bot, channel_text)
+            ok, err = await post_to_channel(context.bot, channel_text)
             original_text = query.message.text or ""
             if ok:
                 new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
             else:
-                new_text = original_text + "\n\n❌ Error al publicar en canal"
+                new_text = original_text + f"\n\n❌ Error al publicar en canal: {err}"
             try:
                 await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
             except Exception:
@@ -3425,12 +3491,12 @@ async def handle_publish_callback(
             await query.answer("Publicando en canal...")
             try:
                 channel_text = format_content_for_channel("blog", article)
-                ok = await post_to_channel(context.bot, channel_text)
+                ok, err = await post_to_channel(context.bot, channel_text)
                 original_text = query.message.text or ""
                 if ok:
                     new_text = original_text + "\n\n✅ Publicado en canal @tuspapeles2026"
                 else:
-                    new_text = original_text + "\n\n❌ Error al publicar en canal"
+                    new_text = original_text + f"\n\n❌ Error al publicar en canal: {err}"
                 try:
                     await query.edit_message_text(new_text[:TG_MAX_LEN], parse_mode=ParseMode.MARKDOWN)
                 except Exception:
