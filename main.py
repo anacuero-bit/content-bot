@@ -11,6 +11,15 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.0.0 (2026-02-22)
+  - REPLACE: /help with full V4 command listing (angles, Predis, InVideo, text, planning, tools)
+  - ADD: /ideas — example commands per media type with different angles
+  - ADD: /predis — test Predis API connection, show brand_id and post count
+  - REPLACE: /stats — content_log-based stats (7 days, by type, by angle, Predis approval, least used)
+  - REWRITE: /weekly — 25 pieces with angle rotation (11 Claude text + 14 Predis in batches of 3)
+  - 19 CommandHandlers: start, help, ideas, blog, video, carousel, image, reel, meme, quote,
+    whatsapp, fbtext, video5, weekly, news, stats, predis, articles, delete
+
 v4.0.0-rc1 (2026-02-22)
   - RENAME: /tiktok → /video with angle support + ad tier (_generate_premium_video)
   - RENAME: /carousel → uses V4 Predis pipeline (cmd_carousel → cmd_carousel)
@@ -2514,42 +2523,68 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command."""
     help_text = (
-        "🤖 *Content Bot v3.0 — Commands*\n\n"
-        "*Single Generation:*\n"
-        "  /blog \\[topic|noticias|guias|mitos\\] — SEO blog article\n"
-        "  /tiktok \\[topic\\] — TikTok script\n"
-        "  /carousel \\[topic\\] — Instagram carousel\n"
-        "  /caption \\[ig|fb\\] \\[topic\\] — Social caption\n"
-        "  /whatsapp \\[type\\] — WhatsApp message\n"
-        "  /fbpost \\[topic\\] — Facebook group post\n"
-        "  /story \\[type\\] — Instagram Story\n\n"
-        "*Batch Generation:*\n"
-        "  /tiktok5 — 5 TikTok scripts\n"
-        "  /carousel3 — 3 carousel sets\n"
-        "  /captions10 — 10 social captions\n"
-        "  /whatsapp5 — 5 WhatsApp messages\n"
-        "  /fbpost5 — 5 Facebook posts\n"
-        "  /stories7 — 7 Story concepts\n\n"
-        "*Mega Batch:*\n"
-        "  /weekly — Full weekly pack (~46 pieces)\n\n"
-        "*Tools:*\n"
-        "  /news — Latest regularización news\n"
-        "  /scan — Force immediate news scan\n"
-        "  /topics — 10 topic suggestions\n"
-        "  /stats — Generation statistics\n"
-        "  /phase \\[phase\\] — Set campaign phase\n"
-        "  /backfill — Publish 7 launch articles\n"
-        "  /articles — List all published articles\n"
-        "  /delete \\[slug|number\\] — Remove a published article\n"
-        "  /help — This message\n\n"
-        "*Branded Content (Predis.ai):*\n"
-        "  /predis\\_setup — Check Predis connection \\+ config\n"
-        "  /branded \\<topic\\> — Branded carousel (Claude \\+ Predis)\n"
-        "  /branded\\_image \\<topic\\> — Branded single image\n"
-        "  /branded\\_video \\<topic\\> — Branded short video\n"
-        "  /predis\\_posts — List content in Predis library"
+        "🤖 *Content Bot v4.0 — Commands*\n\n"
+        "📐 *Ángulos:* fear|hope|urgency|proof|humor|curiosity|ad\n"
+        "Usa /ideas para ver ejemplos de cada ángulo\\.\n\n"
+        "*Predis auto\\-post \\(Claude → Predis\\.ai\\):*\n"
+        "  /carousel \\[angle\\] \\[topic\\] — Carrusel branded\n"
+        "  /image \\[angle\\] \\[topic\\] — Imagen única\n"
+        "  /reel \\[angle\\] \\[topic\\] — Reel/vídeo corto\n"
+        "  /meme \\[topic\\] — Meme \\(humor auto\\)\n"
+        "  /quote \\[topic\\] — Frase motivacional\n\n"
+        "*InVideo manual \\(Claude guión → copiar a InVideo\\):*\n"
+        "  /video \\[angle\\] \\[topic\\] — Guión de vídeo\n"
+        "  /video ad \\[topic\\] — Anuncio premium \\(5 estilos\\)\n"
+        "  /video5 — 5 guiones variados\n\n"
+        "*Texto \\(Claude directo\\):*\n"
+        "  /blog \\[topic|noticias|guias|mitos\\] — Artículo SEO\n"
+        "  /whatsapp \\[angle\\] \\[topic\\] — Mensaje WhatsApp\n"
+        "  /fbtext \\[angle\\] \\[topic\\] — Post Facebook\n\n"
+        "*Planificación:*\n"
+        "  /weekly — Pack semanal \\(25 piezas\\)\n"
+        "  /ideas — Ejemplos de comandos por tipo\n"
+        "  /news — Noticias regularización\n\n"
+        "*Herramientas:*\n"
+        "  /articles — Artículos publicados\n"
+        "  /delete \\[slug|nº\\] — Eliminar artículo\n"
+        "  /stats — Estadísticas de contenido\n"
+        "  /predis — Test conexión Predis\\.ai\n"
+        "  /help — Este mensaje"
     )
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2)
+
+
+@team_only
+async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ideas — show example commands per media type with angles."""
+    ideas_text = (
+        "💡 <b>IDEAS — Ejemplos de comandos por tipo</b>\n\n"
+        "<b>🎠 Carrusel (Predis):</b>\n"
+        "<code>/carousel fear ¿Es seguro dar mis datos?</code>\n"
+        "<code>/carousel hope Tu nueva vida con papeles</code>\n"
+        "<code>/carousel urgency Solo quedan 8 semanas</code>\n\n"
+        "<b>🖼 Imagen (Predis):</b>\n"
+        "<code>/image proof 10.000 familias ya se preparan</code>\n"
+        "<code>/image curiosity ¿Sabías que no necesitas contrato?</code>\n\n"
+        "<b>🎬 Reel (Predis):</b>\n"
+        "<code>/reel humor Cuando te piden el NIE por quinta vez</code>\n"
+        "<code>/reel hope El día que todo cambia</code>\n\n"
+        "<b>😂 Meme (Predis):</b>\n"
+        "<code>/meme Cuando el abogado cobra €450 y tú pagas €199</code>\n\n"
+        "<b>✨ Frase (Predis):</b>\n"
+        "<code>/quote Ningún papel define tu valor</code>\n\n"
+        "<b>🎥 Vídeo (InVideo manual):</b>\n"
+        "<code>/video fear ¿Qué pasa si no presento a tiempo?</code>\n"
+        "<code>/video ad Historia de María: de sin papeles a emprendedora</code>\n"
+        "<code>/video5</code> — 5 guiones variados\n\n"
+        "<b>📝 Texto (Claude):</b>\n"
+        "<code>/blog regularización paso a paso</code>\n"
+        "<code>/whatsapp urgency El plazo cierra en junio</code>\n"
+        "<code>/fbtext proof Miles ya están preparados</code>\n\n"
+        "<b>📦 Pack:</b>\n"
+        "<code>/weekly</code> — 25 piezas con rotación de ángulos"
+    )
+    await update.message.reply_text(ideas_text, parse_mode=ParseMode.HTML)
 
 
 @team_only
@@ -3012,7 +3047,7 @@ async def cmd_video5(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @team_only
 async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /weekly — generate full weekly content pack."""
+    """Handle /weekly — generate full weekly content pack (25 pieces)."""
     chat_id = update.effective_chat.id
 
     # Check cooldown
@@ -3021,12 +3056,12 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hours_ago = (datetime.now() - last).total_seconds() / 3600
         buttons = [
             [
-                InlineKeyboardButton("Yes, generate", callback_data="weekly_confirm"),
-                InlineKeyboardButton("Cancel", callback_data="weekly_cancel"),
+                InlineKeyboardButton("Sí, generar", callback_data="weekly_confirm"),
+                InlineKeyboardButton("Cancelar", callback_data="weekly_cancel"),
             ]
         ]
         await update.message.reply_text(
-            f"⚠️ Last weekly was {hours_ago:.1f} hours ago. Are you sure?",
+            f"⚠️ Último /weekly hace {hours_ago:.1f} horas. ¿Seguro?",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
@@ -3035,57 +3070,293 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Execute the full weekly generation."""
+    """Execute the full weekly generation — 25 pieces with angle rotation.
+
+    Phase 1 (Claude text, 11 pieces):
+      4 video scripts (curiosity, fear, urgency, hope)
+      1 premium ad video
+      2 blog articles
+      2 whatsapp (urgency, curiosity)
+      2 fbtext (proof, curiosity)
+
+    Phase 2 (Predis, 14 pieces, batches of 3):
+      5 carousels (fear, hope, urgency, proof, curiosity)
+      3 images (urgency, curiosity, proof)
+      2 reels (humor, hope)
+      2 memes (humor x2)
+      2 quotes (hope x2)
+    """
     chat_id = update.effective_chat.id
     gen_stats["last_weekly"] = datetime.now()
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text="🚀 *Generating weekly content pack... this takes ~2 minutes*",
-        parse_mode=ParseMode.MARKDOWN,
+        text="🚀 <b>WEEKLY PACK — 25 piezas con rotación de ángulos</b>\n"
+             "Fase 1: 11 piezas Claude | Fase 2: 14 piezas Predis",
+        parse_mode=ParseMode.HTML,
     )
 
-    total = 0
+    piece = 0
+    success = 0
+    errors = 0
 
-    # 7 TikTok scripts (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 1/7: TikTok scripts*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "tiktok", 7, pick_multiple_topics("tiktok", 7))
-    total += count
+    # ── PHASE 1: CLAUDE TEXT (11 pieces) ──────────────────────────────
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="📝 <b>FASE 1/2 — Texto (Claude)</b>",
+        parse_mode=ParseMode.HTML,
+    )
 
-    # 5 Carousel sets (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 2/7: Carousels*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "carousel", 5, pick_multiple_topics("carousel", 5))
-    total += count
+    # 4 video scripts with angles
+    video_angles = ["curiosity", "fear", "urgency", "hope"]
+    for angle in video_angles:
+        piece += 1
+        topic = pick_topic("tiktok")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Generando pieza {piece}/25 — video [{angle}]...",
+        )
+        try:
+            data = await generate_content("tiktok", topic)
+            formatted = format_tiktok_for_telegram(data)
+            await send_long_message(update, formatted, context)
+            log_content("video", angle, topic, "invideo")
+            success += 1
+        except Exception as e:
+            logger.error(f"weekly video [{angle}]: {e}")
+            errors += 1
 
-    # 14 Stories (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 3/7: Stories*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "story", 14, pick_multiple_topics("story", 14))
-    total += count
+    # 1 premium ad video
+    piece += 1
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"⏳ Generando pieza {piece}/25 — video premium [ad]...",
+    )
+    try:
+        ad_topic = pick_topic("tiktok")
+        await _generate_premium_video(update, context, ad_topic)
+        success += 1
+    except Exception as e:
+        logger.error(f"weekly premium ad: {e}")
+        errors += 1
 
-    # 3 WhatsApp messages (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 4/7: WhatsApp*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "whatsapp", 3, pick_multiple_topics("whatsapp", 3))
-    total += count
+    # 2 blog articles
+    blog_topics = pick_multiple_topics("blog", 2)
+    for i, topic in enumerate(blog_topics):
+        piece += 1
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Generando pieza {piece}/25 — blog...",
+        )
+        try:
+            data = await generate_content("blog", topic)
+            formatted = format_blog_for_telegram(data)
+            article_id = hashlib.md5(
+                json.dumps(data, default=str).encode()
+            ).hexdigest()[:8]
+            pending_articles[article_id] = data
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        "🌐 Publicar en web",
+                        callback_data=f"pub_tp_{article_id}",
+                    ),
+                    InlineKeyboardButton(
+                        "📢 Canal",
+                        callback_data=f"pub_ch_{article_id}",
+                    ),
+                ]
+            ]
+            await send_long_message(
+                update, formatted, context,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            log_content("blog", None, topic, "claude")
+            success += 1
+        except Exception as e:
+            logger.error(f"weekly blog: {e}")
+            errors += 1
 
-    # 5 Facebook posts (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 5/7: Facebook posts*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "fbpost", 5, pick_multiple_topics("fbpost", 5))
-    total += count
+    # 2 whatsapp (urgency, curiosity)
+    wa_angles = ["urgency", "curiosity"]
+    for angle in wa_angles:
+        piece += 1
+        topic = pick_topic("whatsapp")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Generando pieza {piece}/25 — whatsapp [{angle}]...",
+        )
+        try:
+            data = await generate_content("whatsapp", topic)
+            formatted = format_whatsapp_for_telegram(data)
+            await send_long_message(update, formatted, context)
+            log_content("whatsapp", angle, topic, "claude")
+            success += 1
+        except Exception as e:
+            logger.error(f"weekly whatsapp [{angle}]: {e}")
+            errors += 1
 
-    # 2 Blog articles (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 6/7: Blog articles*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "blog", 2, pick_multiple_topics("blog", 2))
-    total += count
-
-    # 10 Captions (pillar-distributed)
-    await context.bot.send_message(chat_id=chat_id, text="📦 *Phase 7/7: Captions*", parse_mode=ParseMode.MARKDOWN)
-    count = await _batch_generate(update, context, "caption", 10, pick_multiple_topics("caption", 10))
-    total += count
+    # 2 fbtext (proof, curiosity)
+    fb_angles = ["proof", "curiosity"]
+    for angle in fb_angles:
+        piece += 1
+        topic = pick_topic("fbpost")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Generando pieza {piece}/25 — fbtext [{angle}]...",
+        )
+        try:
+            data = await generate_content("fbpost", topic)
+            formatted = format_fbpost_for_telegram(data)
+            await send_long_message(update, formatted, context)
+            log_content("fbtext", angle, topic, "claude")
+            success += 1
+        except Exception as e:
+            logger.error(f"weekly fbtext [{angle}]: {e}")
+            errors += 1
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"✅ *WEEKLY PACK COMPLETE* — {total} pieces generated!",
-        parse_mode=ParseMode.MARKDOWN,
+        text=f"✅ Fase 1 completa — {success} textos generados",
+    )
+
+    # ── PHASE 2: PREDIS (14 pieces, batches of 3) ────────────────────
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🎨 <b>FASE 2/2 — Predis.ai (branded)</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Define all Predis pieces: (content_type, prompt_template, media_type, angle)
+    predis_pieces = [
+        ("carousel", CAROUSEL_PROMPT_V4, "carousel", "fear"),
+        ("carousel", CAROUSEL_PROMPT_V4, "carousel", "hope"),
+        ("carousel", CAROUSEL_PROMPT_V4, "carousel", "urgency"),
+        ("carousel", CAROUSEL_PROMPT_V4, "carousel", "proof"),
+        ("carousel", CAROUSEL_PROMPT_V4, "carousel", "curiosity"),
+        ("image", IMAGE_PROMPT_V4, "single_image", "urgency"),
+        ("image", IMAGE_PROMPT_V4, "single_image", "curiosity"),
+        ("image", IMAGE_PROMPT_V4, "single_image", "proof"),
+        ("reel", REEL_PROMPT_V4, "video", "humor"),
+        ("reel", REEL_PROMPT_V4, "video", "hope"),
+        ("meme", MEME_PROMPT_V4, "single_image", "humor"),
+        ("meme", MEME_PROMPT_V4, "single_image", "humor"),
+        ("quote", QUOTE_PROMPT_V4, "single_image", "hope"),
+        ("quote", QUOTE_PROMPT_V4, "single_image", "hope"),
+    ]
+
+    predis_success = 0
+    predis_errors = 0
+
+    # Process in batches of 3
+    for batch_start in range(0, len(predis_pieces), 3):
+        batch = predis_pieces[batch_start:batch_start + 3]
+
+        for content_type, prompt_template, media_type, angle in batch:
+            piece += 1
+            topic = pick_topic(content_type)
+            angle_instruction = get_angle_instruction(angle)
+            seo_keywords = get_seo_keywords()
+            formatted_prompt = prompt_template.format(
+                angle_instruction=angle_instruction,
+                seo_keywords=seo_keywords,
+                topic=topic,
+            )
+
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⏳ Generando pieza {piece}/25 — {content_type} [{angle}]...",
+            )
+
+            try:
+                # Claude text generation
+                generated_text = await generate_content(
+                    content_type, topic, override_prompt=formatted_prompt,
+                )
+                if isinstance(generated_text, dict):
+                    generated_text = generated_text.get("_raw", str(generated_text))
+                if len(generated_text) > 950:
+                    generated_text = generated_text[:950]
+
+                if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"📝 {content_type.upper()} [{angle}]\n\n{generated_text[:500]}\n\n"
+                             f"⚠️ Predis no configurado",
+                    )
+                    log_content(content_type, angle, topic, "claude_only")
+                    predis_success += 1
+                    continue
+
+                # Create Predis content
+                predis_kwargs = {
+                    "text": generated_text,
+                    "media_type": media_type,
+                    "model_version": "4",
+                }
+                if media_type == "video":
+                    predis_kwargs["video_duration"] = "15"
+
+                create_result = await predis_create_content(**predis_kwargs)
+
+                if not create_result.get("ok"):
+                    error_msg = create_result.get("error", "Unknown")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"❌ Predis error ({content_type} [{angle}]): {error_msg}",
+                    )
+                    log_content(content_type, angle, topic, "predis_error")
+                    predis_errors += 1
+                    continue
+
+                post_id = create_result["post_ids"][0]
+
+                # Poll until complete
+                completed = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
+
+                if not completed.get("ok"):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⚠️ Predis timeout ({content_type} [{angle}]). ID: {post_id}",
+                    )
+                    log_content(content_type, angle, topic, "predis", predis_post_id=post_id)
+                    predis_errors += 1
+                    continue
+
+                # Send approval buttons
+                post_data = {
+                    "generated_text": generated_text,
+                    "generated_media": completed.get("urls", []),
+                }
+                await send_predis_approval(
+                    update, context, post_id, post_data, content_type, angle, topic,
+                )
+                log_content(content_type, angle, topic, "predis", predis_post_id=post_id)
+                predis_success += 1
+
+            except Exception as e:
+                logger.error(f"weekly predis {content_type} [{angle}]: {e}")
+                predis_errors += 1
+
+        # Wait message between batches (except after last batch)
+        if batch_start + 3 < len(predis_pieces):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⏸ Batch completo. Siguiente batch...",
+            )
+
+    total_success = success + predis_success
+    total_errors = errors + predis_errors
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ <b>WEEKLY PACK COMPLETO</b>\n\n"
+            f"📊 {total_success}/25 piezas generadas\n"
+            f"📝 Texto: {success} | 🎨 Predis: {predis_success}\n"
+            f"{'❌ Errores: ' + str(total_errors) if total_errors else '🎉 Sin errores'}"
+        ),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -3204,43 +3475,100 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @team_only
+async def cmd_predis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /predis — test Predis API connection."""
+    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+        await update.message.reply_text(
+            "❌ Predis no configurado. Faltan PREDIS_API_KEY o PREDIS_BRAND_ID."
+        )
+        return
+
+    wait_msg = await update.message.reply_text("⏳ Probando conexión Predis.ai...")
+
+    try:
+        result = await predis_get_posts(page=1)
+
+        if result.get("ok"):
+            posts = result.get("posts", [])
+            post_count = len(posts)
+            text = (
+                f"✅ <b>Predis conectado</b>\n\n"
+                f"🔑 <b>Brand ID:</b> <code>{PREDIS_BRAND_ID}</code>\n"
+                f"📦 <b>Posts en biblioteca:</b> {post_count}\n\n"
+                f"<b>Comandos Predis disponibles:</b>\n"
+                f"  /carousel — Carrusel branded\n"
+                f"  /image — Imagen única\n"
+                f"  /reel — Reel/vídeo corto\n"
+                f"  /meme — Meme\n"
+                f"  /quote — Frase motivacional"
+            )
+        else:
+            error = result.get("error", "Unknown error")
+            text = f"❌ <b>Error Predis:</b> {html_mod.escape(str(error))}"
+
+        await wait_msg.edit_text(text, parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Error de conexión: {e}")
+
+
+@team_only
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats — show generation statistics."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_count = gen_stats["by_date"].get(today, 0)
+    """Handle /stats — show content log statistics (last 7 days)."""
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
 
-    # Calculate this week's count
-    week_start = datetime.now() - timedelta(days=datetime.now().weekday())
-    week_count = sum(
-        v
-        for k, v in gen_stats["by_date"].items()
-        if k >= week_start.strftime("%Y-%m-%d")
-    )
+    # Filter last 7 days
+    recent = [
+        entry for entry in content_log
+        if entry.get("timestamp", "") >= week_ago.isoformat()
+    ]
 
-    # By type breakdown
-    by_type = "\n".join(
-        f"  {k}: {v}" for k, v in sorted(gen_stats["by_type"].items())
-    )
-    if not by_type:
-        by_type = "  No content generated yet"
+    total = len(recent)
 
-    last_weekly = gen_stats.get("last_weekly")
-    weekly_info = (
-        last_weekly.strftime("%Y-%m-%d %H:%M")
-        if last_weekly
-        else "Never"
-    )
+    # Counts by media_type
+    by_type = {}
+    for entry in recent:
+        mt = entry.get("media_type", "unknown")
+        by_type[mt] = by_type.get(mt, 0) + 1
+
+    type_lines = "\n".join(
+        f"  {k}: {v}" for k, v in sorted(by_type.items())
+    ) or "  Sin contenido aún"
+
+    # Counts by angle
+    by_angle = {}
+    for entry in recent:
+        a = entry.get("angle") or "sin ángulo"
+        by_angle[a] = by_angle.get(a, 0) + 1
+
+    angle_lines = "\n".join(
+        f"  {k}: {v}" for k, v in sorted(by_angle.items())
+    ) or "  Sin datos"
+
+    # Least used angle (from VALID_ANGLES, excluding 'ad')
+    countable_angles = {a for a in VALID_ANGLES if a != "ad"}
+    least_used = min(countable_angles, key=lambda a: by_angle.get(a, 0))
+    least_count = by_angle.get(least_used, 0)
+
+    # Predis approval stats
+    predis_entries = [e for e in recent if e.get("predis_post_id")]
+    approved = sum(1 for e in predis_entries if e.get("approved") is True)
+    rejected = sum(1 for e in predis_entries if e.get("approved") is False)
+    pending = sum(1 for e in predis_entries if e.get("approved") is None)
+
+    # All-time total
+    all_time = len(content_log)
 
     text = (
-        f"📊 *GENERATION STATS*\n\n"
-        f"*Today:* {today_count}\n"
-        f"*This week:* {week_count}\n"
-        f"*Total:* {gen_stats['total']}\n\n"
-        f"*By type:*\n{by_type}\n\n"
-        f"*Last /weekly:* {weekly_info}\n"
-        f"*Phase:* {get_current_phase()}"
+        f"📊 <b>ESTADÍSTICAS — Últimos 7 días</b>\n\n"
+        f"<b>Total piezas:</b> {total} (all-time: {all_time})\n\n"
+        f"<b>Por tipo:</b>\n{type_lines}\n\n"
+        f"<b>Por ángulo:</b>\n{angle_lines}\n\n"
+        f"<b>Predis:</b> ✅ {approved} aprobados | ❌ {rejected} rechazados | ⏳ {pending} pendientes\n\n"
+        f"<b>Ángulo menos usado:</b> {least_used} ({least_count})"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 
@@ -4752,9 +5080,13 @@ def main():
     # Weekly mega-batch
     app.add_handler(CommandHandler("weekly", cmd_weekly))
 
+    # Planning & discovery
+    app.add_handler(CommandHandler("ideas", cmd_ideas))
+
     # Monitoring & tools
     app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("predis", cmd_predis))
     app.add_handler(CommandHandler("articles", cmd_articles))
     app.add_handler(CommandHandler("delete", cmd_delete))
 
@@ -4782,7 +5114,7 @@ def main():
 
     app.post_init = post_init
 
-    logger.info("Content Bot v4.0-rc1 starting")
+    logger.info("Content Bot v4.0 starting")
     logger.info(f"Team IDs: {TEAM_CHAT_IDS}")
     logger.info(f"Phase: {get_current_phase()}")
     app.run_polling()
