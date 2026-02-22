@@ -11,6 +11,15 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.0.0-beta (2026-02-22)
+  - ADD: send_predis_approval() — unified Predis approval workflow with review checklist
+  - ADD: _predis_command_handler() — shared pipeline: angle → prompt → Claude → Predis → review
+  - ADD: 5 prompt templates: CAROUSEL_PROMPT_V4, IMAGE_PROMPT_V4, REEL_PROMPT_V4, MEME_PROMPT_V4, QUOTE_PROMPT_V4
+  - ADD: 5 new commands: /cr (carousel v4), /image, /reel, /meme, /quote
+  - ADD: Topic pools for image, reel, meme, quote content types
+  - ADD: generate_content override_prompt parameter for raw-text generation
+  - ADD: video_duration + post_type params for predis_create_content
+
 v4.0.0-alpha (2026-02-22)
   - ADD: Angle system — VALID_ANGLES, ANGLE_INSTRUCTIONS, parse_angle_and_topic(), get_angle_instruction()
   - ADD: SEO_KEYWORDS list + get_seo_keywords() helper for regularización keywords
@@ -294,6 +303,100 @@ def log_content(media_type, angle, topic, tool, predis_post_id=None, approved=No
     return entry
 
 
+# ==============================================================================
+# V4 PROMPT TEMPLATES — angle-aware, SEO-injected
+# ==============================================================================
+
+CAROUSEL_PROMPT_V4 = (
+    "{angle_instruction}"
+    "{seo_keywords}"
+    "Genera texto para un CARRUSEL de redes sociales en español (España) sobre: {topic}\n\n"
+    "CONTEXTO: tuspapeles2026.es ayuda a inmigrantes sin papeles en España con la regularización 2026. "
+    "Desde €199 (competencia cobra €350-450). IA + abogados reales. Plazo: abril-junio 2026. "
+    "Requisito: 5 MESES de residencia (NO años). No necesitas contrato de trabajo. "
+    "Tasa de aprobación esperada: 80-90%.\n\n"
+    "ESTRUCTURA: gancho → problema → solución → prueba social → llamada a acción.\n\n"
+    "REGLAS:\n"
+    "- Máximo 900 caracteres\n"
+    "- Tono: cercano, empático, profesional\n"
+    "- NO promesas de resultados garantizados\n"
+    "- Termina con: tuspapeles2026.es | @tuspapeles2026\n"
+    "- Incluir: #regularizacion2026 #sinpapeles #papeles2026 #tuspapeles2026\n"
+    "- NO markdown (sin ** ni ##)\n"
+    "- SOLO texto corrido, nada más"
+)
+
+IMAGE_PROMPT_V4 = (
+    "{angle_instruction}"
+    "{seo_keywords}"
+    "Genera texto para UNA IMAGEN de redes sociales en español (España) sobre: {topic}\n\n"
+    "CONTEXTO: tuspapeles2026.es — regularización 2026 para inmigrantes en España. "
+    "Desde €199. IA + abogados reales. 5 MESES residencia, no necesitas contrato. "
+    "80-90% aprobación esperada. Plazo abril-junio.\n\n"
+    "REGLAS:\n"
+    "- Máximo 400 caracteres\n"
+    "- UNA sola idea impactante\n"
+    "- Tono cercano y empático\n"
+    "- Termina con: tuspapeles2026.es | @tuspapeles2026\n"
+    "- 3-4 hashtags relevantes\n"
+    "- NO markdown\n"
+    "- SOLO texto"
+)
+
+REEL_PROMPT_V4 = (
+    "{angle_instruction}"
+    "{seo_keywords}"
+    "Genera texto para un REEL/VÍDEO CORTO en español (España) sobre: {topic}\n\n"
+    "CONTEXTO: tuspapeles2026.es — regularización 2026 para inmigrantes en España. "
+    "Desde €199. IA + abogados reales. 5 MESES residencia, no contrato. "
+    "80-90% aprobación. Abril-junio.\n\n"
+    "ESTRUCTURA hablada: gancho 2s → desarrollo 8-12s → cierre 3s.\n\n"
+    "REGLAS:\n"
+    "- Máximo 500 caracteres\n"
+    "- Lenguaje hablado, natural\n"
+    "- Tono cercano y directo\n"
+    "- Termina con: tuspapeles2026.es | @tuspapeles2026\n"
+    "- 3-4 hashtags\n"
+    "- NO markdown\n"
+    "- SOLO texto"
+)
+
+MEME_PROMPT_V4 = (
+    "{seo_keywords}"
+    "Genera texto para un MEME en español (España) sobre: {topic}\n\n"
+    "ÁNGULO: HUMOR CÓMPLICE. Situaciones que todo inmigrante en España reconoce.\n\n"
+    "REGLAS:\n"
+    "- Máximo 300 caracteres\n"
+    "- Humor cercano, cómplice, NUNCA ofensivo\n"
+    "- Situación relatable + remate\n"
+    "- Termina con: @tuspapeles2026\n"
+    "- NO markdown\n"
+    "- SOLO texto"
+)
+
+QUOTE_PROMPT_V4 = (
+    "{seo_keywords}"
+    "Genera texto para una FRASE MOTIVACIONAL en español (España) sobre: {topic}\n\n"
+    "TEMAS: esperanza, resiliencia, pertenencia, futuro con papeles.\n\n"
+    "REGLAS:\n"
+    "- Máximo 300 caracteres\n"
+    "- Puede ser frase inventada atribuida a \"Comunidad tuspapeles2026\" o frase histórica real\n"
+    "- Tono inspirador y cálido\n"
+    "- Termina con: @tuspapeles2026\n"
+    "- NO markdown\n"
+    "- SOLO texto"
+)
+
+# Map content types to their V4 prompt templates
+V4_PROMPT_MAP = {
+    "carousel": CAROUSEL_PROMPT_V4,
+    "image": IMAGE_PROMPT_V4,
+    "reel": REEL_PROMPT_V4,
+    "meme": MEME_PROMPT_V4,
+    "quote": QUOTE_PROMPT_V4,
+}
+
+
 # Claude prompts for Predis content generation (conversion-focused)
 BRANDED_PROMPT = """Genera un texto breve para crear un carrusel de redes sociales en español (España) sobre: {topic}
 
@@ -356,6 +459,8 @@ async def predis_create_content(
     media_type: str = "carousel",
     model_version: str = "4",
     n_posts: int = 1,
+    video_duration: str = None,
+    post_type: str = None,
 ) -> dict:
     """Create branded content via Predis.ai API.
 
@@ -364,6 +469,8 @@ async def predis_create_content(
         media_type: "single_image", "carousel", or "video"
         model_version: "4" (best quality, carousel+image) or "2" (all types including video)
         n_posts: Number of variations to generate (1-10)
+        video_duration: Optional video duration ("short", "medium", "long")
+        post_type: Optional post type hint ("generic", "meme", "quotes", etc.)
 
     Returns:
         dict with post_ids and post_status
@@ -379,9 +486,12 @@ async def predis_create_content(
         "color_palette_type": "brand",
     }
 
+    if post_type:
+        payload["post_type"] = post_type
+
     # Video-specific settings
     if media_type == "video":
-        payload["video_duration"] = "short"
+        payload["video_duration"] = video_duration or "short"
         payload["model_version"] = "2"  # v4 doesn't support video
 
     headers = {"Authorization": PREDIS_API_KEY}
@@ -666,6 +776,59 @@ TOPIC_POOLS = {
         "consejo práctico",
         "pregunta a la comunidad",
         "recurso gratuito compartido",
+    ],
+    # V4 content type pools
+    "image": [
+        "5 meses, no 5 años — la verdad sobre el requisito",
+        "desde €199: el proceso más accesible del mercado",
+        "no necesitas contrato de trabajo para aplicar",
+        "80-90% tasa de aprobación esperada en 2026",
+        "tu empadronamiento es tu documento más valioso",
+        "abril 2026: se abre la ventana de oportunidad",
+        "IA + abogados reales = tu mejor combinación",
+        "prepárate hoy, no esperes al último momento",
+        "qué derechos obtienes con la regularización",
+        "miles ya se están preparando — únete",
+        "certificado de antecedentes: cómo conseguirlo",
+        "el proceso es 100% digital, sin colas",
+    ],
+    "reel": [
+        "3 cosas que NO necesitas para regularizarte",
+        "así funciona el proceso paso a paso en 60 segundos",
+        "el mito del contrato de trabajo desmontado",
+        "¿5 meses o 5 años? la verdad te sorprenderá",
+        "qué pasa después de enviar tu solicitud",
+        "documentos que debes tener ANTES de abril",
+        "por qué este momento es histórico para inmigrantes",
+        "errores que te pueden costar la aprobación",
+        "cómo funciona tuspapeles2026 en 15 segundos",
+        "testimonio: preparándose para la regularización",
+        "la cláusula de vulnerabilidad explicada rápido",
+        "desde €199 vs €450 de la competencia",
+    ],
+    "meme": [
+        "cuando te dicen que necesitas 5 años y son solo 5 meses",
+        "yo preparando mis documentos vs mis amigos que no saben",
+        "cuando descubres que no necesitas contrato de trabajo",
+        "el grupo de WhatsApp cuando sale una noticia del BOE",
+        "yo buscando mi empadronamiento de hace 3 años",
+        "cuando tu amigo te dice que conoce a alguien que cobra €100",
+        "esperando el BOE como quien espera los resultados de la lotería",
+        "cuando llevas toda la documentación y te piden una foto más",
+        "yo explicando la regularización en la cena familiar",
+        "cuando te enteras que el proceso es 100% online",
+    ],
+    "quote": [
+        "el valor de tener papeles y vivir sin miedo",
+        "la esperanza de un futuro legal en España",
+        "resiliencia: lo que nos hace fuertes como comunidad",
+        "pertenecer: más que un papel, un derecho",
+        "el coraje de dar el primer paso",
+        "construir un futuro para nuestras familias",
+        "la fuerza de una comunidad que se apoya",
+        "de la incertidumbre a la tranquilidad",
+        "cada documento es un paso hacia la libertad",
+        "juntos somos más fuertes — comunidad inmigrante",
     ],
 }
 
@@ -1110,9 +1273,33 @@ NEVER SAY:
 
 
 async def generate_content(
-    content_type: str, topic: str = "", phase: str = None
+    content_type: str, topic: str = "", phase: str = None,
+    override_prompt: str = None,
 ) -> dict:
-    """Call Claude API and return parsed JSON content."""
+    """Call Claude API and return parsed JSON content.
+
+    When override_prompt is set, uses a simple marketing system prompt and
+    sends override_prompt as the user message. Returns raw text as a string
+    instead of parsed JSON.
+    """
+    # Override mode: raw text generation for V4 prompt templates
+    if override_prompt is not None:
+        try:
+            response = await asyncio.to_thread(
+                claude.messages.create,
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                system="Eres un experto en marketing digital para comunidades inmigrantes en España.",
+                messages=[{"role": "user", "content": override_prompt}],
+            )
+            text = response.content[0].text.strip()
+            track_generation(content_type)
+            return text
+        except Exception as e:
+            logger.error(f"Claude API error (override): {e}")
+            raise
+
+    # Standard mode: JSON content generation (unchanged)
     if not phase:
         phase = get_current_phase()
 
@@ -3673,6 +3860,339 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==============================================================================
+# V4 PREDIS APPROVAL WORKFLOW
+# ==============================================================================
+
+
+async def send_predis_approval(update, context, post_id, post_data, media_label, angle, topic):
+    """Send Predis content preview with approval buttons and review checklist."""
+    chat_id = update.effective_chat.id
+
+    # Extract caption from post_data (try multiple fields)
+    caption = (
+        post_data.get("generated_text")
+        or post_data.get("caption")
+        or post_data.get("text")
+        or ""
+    )
+    if len(caption) > 1500:
+        caption = caption[:1500] + "..."
+
+    # Send image preview if available
+    media_urls = post_data.get("generated_media") or post_data.get("urls") or []
+    if media_urls:
+        try:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=media_urls[0] if isinstance(media_urls[0], str) else media_urls[0].get("url", ""),
+            )
+        except Exception as e:
+            logger.warning(f"send_predis_approval: image preview failed: {e}")
+
+    # Caption preview
+    angle_tag = f" | \U0001f3af {angle}" if angle else ""
+    preview_text = (
+        f"\U0001f4cb <b>PREDIS REVIEW — {media_label.upper()}</b>{angle_tag}\n\n"
+        f"\U0001f4dd <b>Texto generado:</b>\n{html_mod.escape(caption)}\n\n"
+        f"\U0001f4cc <b>Tema:</b> {html_mod.escape(topic)}\n"
+        f"\U0001f194 <b>Predis ID:</b> <code>{post_id}</code>"
+    )
+
+    # Review checklist
+    checklist = (
+        "\n\n\u2753 <b>CHECKLIST ANTES DE APROBAR:</b>\n"
+        "\u2022 \u00bfInfo correcta?\n"
+        "\u2022 \u00bfSin garant\u00edas de resultados?\n"
+        "\u2022 \u00bfTono OK?\n"
+        "\u2022 \u00bfLogo visible?"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("\u2705 Aprobar", callback_data=f"pa_{post_id[:20]}"),
+            InlineKeyboardButton("\u274c Rechazar", callback_data=f"pr_{post_id[:20]}"),
+        ],
+        [
+            InlineKeyboardButton(
+                "\u270f\ufe0f Editar en Predis",
+                url="https://predis.ai/app/content_library",
+            ),
+        ],
+    ])
+
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=preview_text + checklist,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+    # Store in review queue for callback handling
+    predis_review_queue[msg.message_id] = {
+        "post_id": post_id,
+        "caption": caption,
+        "media_urls": media_urls,
+        "media_type": media_label,
+        "source": f"v4_{media_label}",
+        "chat_id": chat_id,
+        "angle": angle,
+        "topic": topic,
+    }
+
+    return msg
+
+
+async def handle_v4_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle V4 approval/rejection callbacks (pa_* and pr_*)."""
+    query = update.callback_query
+    await query.answer()
+
+    msg_id = query.message.message_id
+    data = query.data  # "pa_<postid>" or "pr_<postid>"
+
+    is_approve = data.startswith("pa_")
+    post_id_fragment = data[3:]
+
+    if msg_id not in predis_review_queue:
+        await query.edit_message_text("\u26a0\ufe0f Este item de review ha expirado (bot reiniciado).")
+        return
+
+    item = predis_review_queue.pop(msg_id)
+
+    if not is_approve:
+        await query.edit_message_text(
+            f"\u274c <b>Rechazado y descartado.</b>\n\n"
+            f"Tipo: {item.get('media_type', '?')}\n"
+            f"Predis ID: <code>{item['post_id']}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        # Update content log if we can find the entry
+        for entry in reversed(content_log):
+            if entry.get("predis_post_id") == item["post_id"]:
+                entry["approved"] = False
+                save_content_log()
+                break
+        return
+
+    await query.edit_message_text(
+        f"\u2705 <b>\u00a1Aprobado!</b>\n\n"
+        f"El contenido est\u00e1 en tu dashboard de Predis.ai listo para programar.\n\n"
+        f"\U0001f4cc <b>Siguientes pasos:</b>\n"
+        f"1. Abre predis.ai/app\n"
+        f"2. Busca este post en tu biblioteca de contenido\n"
+        f"3. Programa o publica en tus cuentas conectadas\n\n"
+        f"Predis ID: <code>{item['post_id']}</code>\n"
+        f"Tipo: {item.get('media_type', '?')}\n"
+        f"Media: {len(item.get('media_urls', []))} archivo(s)",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Update content log
+    for entry in reversed(content_log):
+        if entry.get("predis_post_id") == item["post_id"]:
+            entry["approved"] = True
+            save_content_log()
+            break
+
+
+async def _predis_command_handler(
+    update, context, content_type, prompt_template, media_type,
+    model_version="4", post_type=None, video_duration=None, fixed_angle=None,
+):
+    """Shared pipeline: parse angle → generate prompt → Claude → Predis → review."""
+    args = context.args if context.args else []
+
+    # Determine angle and topic
+    if fixed_angle:
+        angle = fixed_angle
+        user_topic = " ".join(args) if args else ""
+    else:
+        angle, user_topic = parse_angle_and_topic(args)
+
+    topic = pick_topic(content_type, user_topic if user_topic else None)
+
+    # Build the formatted prompt
+    angle_instruction = get_angle_instruction(angle)
+    seo_keywords = get_seo_keywords()
+    formatted_prompt = prompt_template.format(
+        angle_instruction=angle_instruction,
+        seo_keywords=seo_keywords,
+        topic=topic,
+    )
+
+    angle_label = f" [\U0001f3af {angle}]" if angle else ""
+    wait_msg = await update.message.reply_text(
+        f"\u23f3 Generando {content_type}{angle_label}..."
+    )
+
+    try:
+        # Generate text via Claude with override_prompt
+        generated_text = await generate_content(
+            content_type, topic, override_prompt=formatted_prompt,
+        )
+
+        # Ensure it's a string (override mode returns raw text)
+        if isinstance(generated_text, dict):
+            generated_text = generated_text.get("_raw", str(generated_text))
+
+        # Truncate to 950 chars for Predis input
+        if len(generated_text) > 950:
+            generated_text = generated_text[:950]
+
+        # If no Predis API key, just show the text
+        if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+            await wait_msg.delete()
+            result_text = (
+                f"\U0001f4dd <b>{content_type.upper()}</b>{angle_label}\n\n"
+                f"{html_mod.escape(generated_text)}\n\n"
+                f"\u26a0\ufe0f <i>Predis no configurado — solo texto generado.</i>"
+            )
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=result_text,
+                parse_mode=ParseMode.HTML,
+            )
+            log_content(content_type, angle, topic, "claude_only")
+            return
+
+        # Create Predis content
+        await wait_msg.edit_text(
+            f"\u23f3 Texto listo. Enviando a Predis.ai ({media_type})..."
+        )
+
+        predis_kwargs = {
+            "text": generated_text,
+            "media_type": media_type,
+            "model_version": model_version,
+        }
+        if post_type:
+            predis_kwargs["post_type"] = post_type
+        if video_duration:
+            predis_kwargs["video_duration"] = video_duration
+
+        create_result = await predis_create_content(**predis_kwargs)
+
+        if not create_result.get("ok"):
+            error_msg = create_result.get("error", "Unknown error")
+            await wait_msg.edit_text(
+                f"\u274c Predis error: {error_msg}\n\n"
+                f"\U0001f4dd Texto generado:\n{generated_text[:500]}"
+            )
+            log_content(content_type, angle, topic, "predis_error")
+            return
+
+        post_id = create_result["post_ids"][0]
+
+        await wait_msg.edit_text(
+            f"\u23f3 Predis procesando ({media_type})... esperando resultado."
+        )
+
+        # Poll until complete
+        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
+
+        if not completed.get("ok"):
+            await wait_msg.edit_text(
+                f"\u26a0\ufe0f Predis timeout. ID: <code>{post_id}</code>\n"
+                f"Revisa en predis.ai/app\n\n"
+                f"\U0001f4dd Texto:\n{generated_text[:400]}",
+                parse_mode=ParseMode.HTML,
+            )
+            log_content(content_type, angle, topic, "predis", predis_post_id=post_id)
+            return
+
+        await wait_msg.delete()
+
+        # Build post_data for approval
+        post_data = {
+            "generated_text": generated_text,
+            "generated_media": completed.get("urls", []),
+        }
+
+        await send_predis_approval(
+            update, context, post_id, post_data, content_type, angle, topic,
+        )
+
+        log_content(content_type, angle, topic, "predis", predis_post_id=post_id)
+
+    except Exception as e:
+        logger.error(f"_predis_command_handler error ({content_type}): {e}")
+        try:
+            await wait_msg.edit_text(f"\u274c Error generando {content_type}: {e}")
+        except Exception:
+            pass
+
+
+# ==============================================================================
+# V4 COMMAND HANDLERS — /cr, /image, /reel, /meme, /quote
+# ==============================================================================
+
+
+@team_only
+async def cmd_carousel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cr [angle] [topic] — generate branded carousel via V4 pipeline."""
+    await _predis_command_handler(
+        update, context,
+        content_type="carousel",
+        prompt_template=CAROUSEL_PROMPT_V4,
+        media_type="carousel",
+        model_version="4",
+    )
+
+
+@team_only
+async def cmd_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /image [angle] [topic] — generate branded single image."""
+    await _predis_command_handler(
+        update, context,
+        content_type="image",
+        prompt_template=IMAGE_PROMPT_V4,
+        media_type="single_image",
+        model_version="4",
+    )
+
+
+@team_only
+async def cmd_reel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /reel [angle] [topic] — generate branded short video."""
+    await _predis_command_handler(
+        update, context,
+        content_type="reel",
+        prompt_template=REEL_PROMPT_V4,
+        media_type="video",
+        model_version="2",
+        video_duration="short",
+    )
+
+
+@team_only
+async def cmd_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /meme [topic] — generate branded meme (angle always humor)."""
+    await _predis_command_handler(
+        update, context,
+        content_type="meme",
+        prompt_template=MEME_PROMPT_V4,
+        media_type="single_image",
+        model_version="2",
+        post_type="meme",
+        fixed_angle="humor",
+    )
+
+
+@team_only
+async def cmd_quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /quote [topic] — generate motivational quote image (angle always hope)."""
+    await _predis_command_handler(
+        update, context,
+        content_type="quote",
+        prompt_template=QUOTE_PROMPT_V4,
+        media_type="single_image",
+        model_version="2",
+        post_type="quotes",
+        fixed_angle="hope",
+    )
+
+
+# ==============================================================================
 # PREDIS REVIEW QUEUE + BRANDED COMMANDS
 # ==============================================================================
 
@@ -4828,8 +5348,16 @@ def main():
     app.add_handler(CommandHandler("branded_ideas", cmd_branded_ideas))
     app.add_handler(CommandHandler("predis_posts", cmd_predis_posts))
 
+    # V4 media commands (angle-aware + Predis pipeline)
+    app.add_handler(CommandHandler("cr", cmd_carousel_new))
+    app.add_handler(CommandHandler("image", cmd_image))
+    app.add_handler(CommandHandler("reel", cmd_reel))
+    app.add_handler(CommandHandler("meme", cmd_meme))
+    app.add_handler(CommandHandler("quote", cmd_quote))
+
     # Predis review queue + Brand It callbacks (BEFORE catch-all)
     app.add_handler(CallbackQueryHandler(handle_predis_review, pattern=f"^({PREDIS_APPROVE}|{PREDIS_REJECT}):"))
+    app.add_handler(CallbackQueryHandler(handle_v4_approval, pattern="^p[ar]_"))
     app.add_handler(CallbackQueryHandler(handle_brand_it, pattern="^brand_it:"))
 
     # Callback handlers (publish buttons, weekly confirm, blog topic selection)
@@ -4856,7 +5384,7 @@ def main():
 
     app.post_init = post_init
 
-    logger.info("Content Bot v3.0 starting")
+    logger.info("Content Bot v4.0-beta starting")
     logger.info(f"Team IDs: {TEAM_CHAT_IDS}")
     logger.info(f"Phase: {get_current_phase()}")
     app.run_polling()
