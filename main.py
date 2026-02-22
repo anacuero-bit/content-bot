@@ -183,11 +183,12 @@ PREDIS_BRAND_ID = os.getenv("PREDIS_BRAND_ID", "")
 
 # tuspapeles2026 brand details — injected into every Predis request
 TP26_BRAND_DETAILS = json.dumps({
-    "color_1": "1B3A5C",
-    "color_2": "D4A843",
-    "color_3": "FFFFFF",
-    "brand_website": "tuspapeles2026.es",
+    "color_1": "#1B3A5C",
+    "color_2": "#D4A843",
+    "color_3": "#FFFFFF",
+    "brand_name": "tuspapeles2026",
     "brand_handle": "@tuspapeles2026",
+    "brand_website": "tuspapeles2026.es",
 })
 
 
@@ -3731,50 +3732,19 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f9e0 Generating content with Claude...")
+    status_msg = await update.message.reply_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
 
     try:
-        # Step 1: Claude generates carousel text in Spanish
-        carousel_prompt = (
-            f"Write a 6-slide educational carousel about: {topic}\n\n"
-            f"Context: Spain's 2026 extraordinary regularization for undocumented immigrants.\n"
-            f"Language: Spanish (Spain) \u2014 use European Spanish, not Latin American.\n"
-            f"Tone: warm, empathetic, professional, trustworthy.\n\n"
-            f"CRITICAL LEGAL FACTS \u2014 use these exactly:\n"
-            f"- Requirement: 5 MONTHS continuous residence in Spain (NOT years)\n"
-            f"- Entry before: December 31, 2025\n"
-            f"- NO job offer required (vulnerability clause eliminates this)\n"
-            f"- Application window: April 1 \u2013 June 30, 2026\n"
-            f"- 100% online submission, no office visits needed\n"
-            f"- Provisional work permit granted IMMEDIATELY upon filing\n"
-            f"- Expected approval rate: 80-90% based on 2005 precedent\n"
-            f"- ALL nationalities eligible, not just Latin American\n"
-            f"- Cost with tuspapeles2026: \u20ac199 (prepay) vs \u20ac350-450 elsewhere\n\n"
-            f"Format: Return a single text block (NOT JSON) that covers the topic across "
-            f"6 logical sections. Each section should have a clear heading and 2-3 sentences. "
-            f"End with a call to action mentioning tuspapeles2026.es.\n"
-            f"Keep it educational and factual. No hype, no false promises."
+        # Build short prompt for Predis (it generates its own slide content)
+        predis_text = (
+            f"Información sobre {topic} - regularización extraordinaria España 2026. "
+            f"Requisitos, plazos y proceso. tuspapeles2026.es"
         )
 
-        response = await asyncio.to_thread(
-            claude.messages.create,
-            model="claude-sonnet-4-20250514",
-            max_tokens=1200,
-            messages=[{"role": "user", "content": carousel_prompt}],
-        )
-
-        carousel_text = response.content[0].text.strip()
-
-        if len(carousel_text) < 50:
-            await status_msg.edit_text("\u274c Claude returned too little text. Try a different topic.")
-            return
-
-        await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
-
-        # Step 2: Send to Predis.ai for branded rendering
+        # Debug payload mirror (for Telegram echo)
         debug_payload = {
             "brand_id": PREDIS_BRAND_ID,
-            "text": carousel_text,
+            "text": predis_text,
             "media_type": "carousel",
             "model_version": "4",
             "n_posts": "1",
@@ -3783,8 +3753,9 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "color_palette_type": "brand",
             "brand_details": TP26_BRAND_DETAILS,
         }
+
         predis_result = await predis_create_content(
-            text=carousel_text,
+            text=predis_text,
             media_type="carousel",
             model_version="4",
             n_posts=1,
