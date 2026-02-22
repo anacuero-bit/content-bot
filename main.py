@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Content Bot v3.0 — AI Content Factory for tuspapeles2026
+Content Bot v4.0 — AI Content Factory for tuspapeles2026
 ================================================================================
 Repository: github.com/anacuero-bit/content-bot
 Updated:    2026-02-16
@@ -11,6 +11,12 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.0.0-alpha (2026-02-22)
+  - ADD: Angle system — VALID_ANGLES, ANGLE_INSTRUCTIONS, parse_angle_and_topic(), get_angle_instruction()
+  - ADD: SEO_KEYWORDS list + get_seo_keywords() helper for regularización keywords
+  - ADD: Content tracking — content_log in-memory + content_log.json persistence
+  - ADD: log_content() records media_type, angle, topic, tool, predis_post_id, approved
+
 v3.3.0 (2026-02-20)
   - ADD: Predis.ai API integration — generate branded carousels, images, and videos
   - ADD: /predis_setup command — verify Predis connection, show brand info + credits
@@ -132,6 +138,7 @@ import html as html_mod
 import random
 import hashlib
 import base64
+import uuid
 import io
 from datetime import datetime, timedelta, timezone
 
@@ -180,6 +187,112 @@ TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", os.environ.get("TELEGRAM_CHANNEL
 PREDIS_BASE = "https://brain.predis.ai/predis_api/v1"
 PREDIS_API_KEY = os.getenv("PREDIS_API_KEY", "")
 PREDIS_BRAND_ID = os.getenv("PREDIS_BRAND_ID", "")
+
+# ==============================================================================
+# ANGLE SYSTEM — emotional angle selection for content generation
+# ==============================================================================
+
+VALID_ANGLES = {"fear", "hope", "urgency", "proof", "humor", "curiosity", "ad"}
+
+ANGLE_INSTRUCTIONS = {
+    "fear": "ÁNGULO: MIEDO → ALIVIO. Empieza con el miedo real, luego ofrece solución. Tono: empático, tranquilizador.",
+    "hope": "ÁNGULO: ESPERANZA. Pinta el futuro positivo con papeles. Tono: inspirador, cálido.",
+    "urgency": "ÁNGULO: URGENCIA. El tiempo se acaba. Fechas, plazos. Tono: directo, firme. NO alarmista.",
+    "proof": "ÁNGULO: PRUEBA SOCIAL. Miles ya se preparan. Datos, números. Tono: confiable.",
+    "humor": "ÁNGULO: HUMOR CÓMPLICE. Situaciones que todo inmigrante reconoce. Tono: ligero, cercano, viral.",
+    "curiosity": "ÁNGULO: CURIOSIDAD. Pregunta o dato sorprendente. '¿Sabías que...?' Tono: intrigante.",
+    "ad": "ÁNGULO: ANUNCIO DIRECTO. Presenta el servicio con beneficios claros. Tono: profesional, persuasivo.",
+}
+
+
+def parse_angle_and_topic(args: list) -> tuple:
+    """Parse angle and topic from command arguments.
+
+    If the first arg is a valid angle, return (angle, remaining args as topic).
+    Otherwise return (None, all args as topic).
+    """
+    if args and args[0].lower() in VALID_ANGLES:
+        angle = args[0].lower()
+        topic = " ".join(args[1:]) if len(args) > 1 else ""
+        return (angle, topic)
+    return (None, " ".join(args) if args else "")
+
+
+def get_angle_instruction(angle) -> str:
+    """Return the instruction string for a given angle, or a default."""
+    if angle and angle in ANGLE_INSTRUCTIONS:
+        return ANGLE_INSTRUCTIONS[angle] + "\n\n"
+    return "Elige el ángulo emocional más efectivo.\n\n"
+
+
+# ==============================================================================
+# SEO KEYWORDS
+# ==============================================================================
+
+SEO_KEYWORDS = [
+    "regularización extraordinaria 2026",
+    "papeles España 2026",
+    "arraigo social España",
+    "permiso residencia sin papeles",
+    "trámite extranjería 2026",
+    "documentación inmigrantes España",
+    "legalización inmigrantes 2026",
+]
+
+
+def get_seo_keywords(count=3) -> str:
+    """Return a random sample of SEO keywords as an instruction string."""
+    sample = random.sample(SEO_KEYWORDS, min(count, len(SEO_KEYWORDS)))
+    return "KEYWORDS SEO (incluir de forma natural): " + ", ".join(sample) + "\n\n"
+
+
+# ==============================================================================
+# CONTENT TRACKING
+# ==============================================================================
+
+content_log: list = []
+
+
+def load_content_log():
+    """Load content log from content_log.json if it exists."""
+    global content_log
+    try:
+        with open("content_log.json", "r", encoding="utf-8") as f:
+            content_log = json.load(f)
+        logger.info(f"Loaded {len(content_log)} entries from content_log.json")
+    except FileNotFoundError:
+        content_log = []
+        logger.info("No content_log.json found, starting fresh")
+    except Exception as e:
+        content_log = []
+        logger.error(f"Error loading content_log.json: {e}")
+
+
+def save_content_log():
+    """Save content log to content_log.json."""
+    try:
+        with open("content_log.json", "w", encoding="utf-8") as f:
+            json.dump(content_log, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving content_log.json: {e}")
+
+
+def log_content(media_type, angle, topic, tool, predis_post_id=None, approved=None):
+    """Append a content entry to the log and save to file."""
+    entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "media_type": media_type,
+        "angle": angle,
+        "topic": topic,
+        "tool": tool,
+        "predis_post_id": predis_post_id,
+        "approved": approved,
+    }
+    content_log.append(entry)
+    save_content_log()
+    return entry
+
 
 # Claude prompts for Predis content generation (conversion-focused)
 BRANDED_PROMPT = """Genera un texto breve para crear un carrusel de redes sociales en español (España) sobre: {topic}
@@ -4672,6 +4785,7 @@ async def handle_publish_callback(
 
 def main():
     """Start the bot."""
+    load_content_log()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Single generation commands
