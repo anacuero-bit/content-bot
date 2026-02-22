@@ -257,7 +257,7 @@ async def predis_get_posts(page: int = 1) -> dict:
         resp = await client.get(
             f"{PREDIS_BASE}/get_posts/",
             headers=headers,
-            params={"page": page},
+            params={"brand_id": PREDIS_BRAND_ID, "page": page},
         )
 
     if resp.status_code >= 400:
@@ -272,7 +272,7 @@ async def predis_get_posts(page: int = 1) -> dict:
 async def predis_get_templates(media_type: str = None, page: int = 1) -> dict:
     """Get available templates from Predis.ai."""
     headers = {"Authorization": PREDIS_API_KEY}
-    params = {"page": page}
+    params = {"brand_id": PREDIS_BRAND_ID, "page": page}
     if media_type:
         params["media_type"] = media_type
 
