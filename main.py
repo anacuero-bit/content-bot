@@ -181,39 +181,61 @@ PREDIS_BASE = "https://brain.predis.ai/predis_api/v1"
 PREDIS_API_KEY = os.getenv("PREDIS_API_KEY", "")
 PREDIS_BRAND_ID = os.getenv("PREDIS_BRAND_ID", "")
 
-# tuspapeles2026 brand details — injected into every Predis request
-TP26_BRAND_DETAILS = json.dumps({
-    "color_1": "1B3A5C",
-    "color_2": "D4A843",
-    "color_3": "FFFFFF",
-    "brand_handle": "@tuspapeles2026",
-    "brand_website": "tuspapeles2026.es",
-})
+# Claude prompts for Predis content generation (conversion-focused)
+BRANDED_PROMPT = """Genera un texto breve para crear un carrusel de redes sociales en español (España) sobre: {topic}
 
-# Claude prompt for generating condensed branded text (<1000 chars for Predis limit)
-BRANDED_PROMPT = """Generate a concise social media post prompt in Spanish (Spain) about: {topic}
+CONTEXTO: Somos tuspapeles2026.es, una plataforma que ayuda a inmigrantes sin papeles en España a tramitar su regularización 2026. Nuestro servicio cuesta desde €199 (la competencia cobra €350-450). Usamos IA para validar documentos 24/7 y abogados reales para la presentación.
 
-This text will be used by an AI design tool to create a branded carousel AND its caption/hashtags for auto-posting to Instagram, TikTok, and Facebook. The tool uses this text to generate BOTH the visual slides AND the accompanying post caption and hashtags.
+OBJETIVO: Convertir visualizaciones en clics a tuspapeles2026.es
 
-RULES:
-- Maximum 850 characters total (HARD LIMIT — count carefully)
-- Structure the text so it works as both slide content AND caption context
-- Include ONLY these verified legal facts where relevant:
-  • 5 MONTHS continuous residence required (NOT years)
-  • Must have entered Spain before 31/12/2025
-  • NO job offer required — vulnerability clause presumes vulnerability
-  • 100% online process, no office visits
-  • Application window: April 1 – June 30, 2026
-  • Immediate provisional work permit upon filing
-  • 80-90% expected approval rate (based on 2005 precedent)
-  • All nationalities eligible
-- End with: tuspapeles2026.es | Desde €199 | @tuspapeles2026
-- Include these hashtag suggestions at the very end: #regularizacion2026 #sinpapeles #papeles2026 #tuspapeles
-- Tone: professional, hopeful, empathetic. NOT salesy.
-- Do NOT invent ANY legal facts not listed above
-- Do NOT use slide markers like [Slide 1] or **Slide 1:**
-- Do NOT use markdown formatting (no ** or ## etc)
-- Output ONLY the text, nothing else"""
+CATEGORÍAS DE CONTENIDO (elige la más relevante al tema):
+
+1. QUIÉNES SOMOS: Plataforma online respaldada por abogados reales. Proceso 100% digital. Asistente 24/7 por Telegram. Desde €199.
+
+2. MIEDOS DEL PÚBLICO: ¿Es una estafa? No — somos un despacho registrado. ¿Me deportarán? No — el proceso está diseñado para protegerte. ¿Es demasiado caro? Desde €199, menos que cualquier competidor. ¿Es complicado? Nosotros lo hacemos por ti.
+
+3. DIFERENCIADORES: Precio más bajo del mercado. IA que revisa documentos al instante. Sin colas ni oficinas. Abogados que hablan tu idioma. Te acompañamos hasta la resolución.
+
+4. URGENCIA Y ACCIÓN: La ventana se abre en abril. Preparar documentos lleva tiempo. No esperes al último momento. Verifica gratis si cumples requisitos.
+
+5. TESTIMONIAL/SOCIAL PROOF: Miles de personas ya están preparándose. Únete a nuestra comunidad en Telegram. No estás solo en esto.
+
+REGLAS:
+- Máximo 900 caracteres
+- Tono: cercano, empático, profesional. Como un amigo que te ayuda.
+- NO lenguaje agresivo de ventas
+- NO promesas de resultados garantizados
+- Termina siempre con: tuspapeles2026.es | @tuspapeles2026
+- Incluir: #regularizacion2026 #sinpapeles #papeles2026 #tuspapeles2026
+- NO usar formato markdown (sin ** ni ##)
+- NO usar marcadores de diapositiva
+- Escribe SOLO el texto, nada más"""
+
+BRANDED_IMAGE_PROMPT = """Genera un texto muy breve para una imagen de redes sociales en español (España) sobre: {topic}
+
+CONTEXTO: tuspapeles2026.es ayuda a inmigrantes sin papeles en España con la regularización 2026. Desde €199. Abogados reales + IA.
+
+REGLAS:
+- Máximo 500 caracteres
+- Una idea central, directa, impactante
+- Tono cercano y empático
+- Termina con: tuspapeles2026.es | @tuspapeles2026
+- Incluir 3-4 hashtags relevantes
+- NO markdown, NO marcadores
+- Escribe SOLO el texto"""
+
+BRANDED_VIDEO_PROMPT = """Genera un texto breve para un vídeo corto de redes sociales en español (España) sobre: {topic}
+
+CONTEXTO: tuspapeles2026.es ayuda a inmigrantes sin papeles en España con la regularización 2026. Desde €199. Proceso 100% online con abogados reales.
+
+REGLAS:
+- Máximo 600 caracteres
+- Estructura: gancho + problema + solución + llamada a acción
+- Tono: cercano, directo, esperanzador
+- Termina con: tuspapeles2026.es | @tuspapeles2026
+- Incluir 3-4 hashtags
+- NO markdown
+- Escribe SOLO el texto"""
 
 
 async def predis_create_content(
@@ -221,7 +243,6 @@ async def predis_create_content(
     media_type: str = "carousel",
     model_version: str = "4",
     n_posts: int = 1,
-    use_brand_palette: bool = True,
 ) -> dict:
     """Create branded content via Predis.ai API.
 
@@ -230,7 +251,6 @@ async def predis_create_content(
         media_type: "single_image", "carousel", or "video"
         model_version: "4" (best quality, carousel+image) or "2" (all types including video)
         n_posts: Number of variations to generate (1-10)
-        use_brand_palette: If True, inject TP26 brand colors/logo
 
     Returns:
         dict with post_ids and post_status
@@ -245,10 +265,6 @@ async def predis_create_content(
         "output_language": "spanish",
         "color_palette_type": "brand",
     }
-
-    # Inject brand details for consistent branding even without dashboard setup
-    if use_brand_palette:
-        payload["brand_details"] = TP26_BRAND_DETAILS
 
     # Video-specific settings
     if media_type == "video":
@@ -3618,6 +3634,16 @@ async def send_predis_to_review(
         "chat_id": chat_id,
     }
 
+    # Review warning — Predis rewrites text, so human must verify
+    review_msg = (
+        "\u26a0\ufe0f ANTES DE APROBAR:\n"
+        "\u2022 \u00bfDice algo legalmente incorrecto?\n"
+        "\u2022 \u00bfPromete resultados garantizados?\n"
+        "\u2022 \u00bfEl tono es apropiado?\n"
+        "Si algo est\u00e1 mal \u2192 edita en predis.ai antes de publicar"
+    )
+    await bot.send_message(chat_id=chat_id, text=review_msg)
+
     return msg
 
 
@@ -3783,34 +3809,12 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
 
         # Step 2: Send condensed text to Predis for branded rendering
-        debug_payload = {
-            "brand_id": PREDIS_BRAND_ID,
-            "text": branded_text,
-            "media_type": "carousel",
-            "model_version": "4",
-            "n_posts": "1",
-            "input_language": "spanish",
-            "output_language": "spanish",
-            "color_palette_type": "brand",
-            "brand_details": TP26_BRAND_DETAILS,
-        }
-
         predis_result = await predis_create_content(
             text=branded_text,
             media_type="carousel",
             model_version="4",
             n_posts=1,
-            use_brand_palette=True,
         )
-
-        # Temporary debug: echo payload to Telegram
-        try:
-            debug_str = json.dumps(debug_payload, indent=2, default=str)[:3000]
-            await update.message.reply_text(
-                f"\U0001f50d Debug payload:\n{debug_str}"
-            )
-        except Exception:
-            pass
 
         if not predis_result.get("ok"):
             error = predis_result.get("error", predis_result.get("errors", "Unknown error"))
@@ -3883,13 +3887,6 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
             source=f"branded: {topic[:50]}",
         )
 
-        # Also send the raw Claude text for reference
-        await update.message.reply_text(
-            f"\U0001f4c4 <b>Generated text (for reference):</b>\n\n"
-            f"{carousel_text[:1500]}{'...' if len(carousel_text) > 1500 else ''}",
-            parse_mode=ParseMode.HTML,
-        )
-
     except Exception as e:
         logger.error(f"Branded carousel error: {e}", exc_info=True)
         await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
@@ -3913,21 +3910,31 @@ async def cmd_branded_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f3a8 Generating branded image...")
+    status_msg = await update.message.reply_text("\U0001f9e0 Generating image prompt with Claude...")
 
     try:
-        predis_text = (
-            f"{topic}. Regularizaci\u00f3n 2026 en Espa\u00f1a. "
-            f"Requisitos: 5 meses de residencia continuada, sin oferta de empleo. "
-            f"Ventana: abril a junio 2026. tuspapeles2026.es"
+        response = await asyncio.to_thread(
+            claude.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=400,
+            messages=[{"role": "user", "content": BRANDED_IMAGE_PROMPT.format(topic=topic)}],
         )
 
+        image_text = response.content[0].text.strip()
+
+        if len(image_text) > 1000:
+            image_text = image_text[:950] + "... tuspapeles2026.es"
+            logger.warning(f"Image text truncated to {len(image_text)} chars")
+
+        logger.info(f"Image text ({len(image_text)} chars): {image_text[:200]}...")
+
+        await status_msg.edit_text("\U0001f3a8 Rendering branded image via Predis.ai...")
+
         predis_result = await predis_create_content(
-            text=predis_text,
+            text=image_text,
             media_type="single_image",
             model_version="4",
             n_posts=1,
-            use_brand_palette=True,
         )
 
         if not predis_result.get("ok"):
@@ -3985,21 +3992,31 @@ async def cmd_branded_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f3ac Generating branded video (this takes longer)...")
+    status_msg = await update.message.reply_text("\U0001f9e0 Generating video prompt with Claude...")
 
     try:
-        predis_text = (
-            f"{topic}. Regularizaci\u00f3n extraordinaria 2026 en Espa\u00f1a. "
-            f"5 meses de residencia, sin oferta de empleo, 100% online. "
-            f"tuspapeles2026.es"
+        response = await asyncio.to_thread(
+            claude.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=400,
+            messages=[{"role": "user", "content": BRANDED_VIDEO_PROMPT.format(topic=topic)}],
         )
 
+        video_text = response.content[0].text.strip()
+
+        if len(video_text) > 1000:
+            video_text = video_text[:950] + "... tuspapeles2026.es"
+            logger.warning(f"Video text truncated to {len(video_text)} chars")
+
+        logger.info(f"Video text ({len(video_text)} chars): {video_text[:200]}...")
+
+        await status_msg.edit_text("\U0001f3ac Rendering branded video via Predis.ai (this takes longer)...")
+
         predis_result = await predis_create_content(
-            text=predis_text,
+            text=video_text,
             media_type="video",
-            model_version="2",  # v4 doesn't support video
+            model_version="2",
             n_posts=1,
-            use_brand_palette=True,
         )
 
         if not predis_result.get("ok"):
@@ -4043,6 +4060,35 @@ async def cmd_branded_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Branded video error: {e}", exc_info=True)
         await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
+
+
+@team_only
+async def cmd_branded_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List ready-to-use topic ideas for /branded commands."""
+    ideas = (
+        "\U0001f4a1 Ideas para /branded:\n\n"
+        "QUI\u00c9NES SOMOS:\n"
+        "/branded qui\u00e9nes somos y c\u00f3mo te ayudamos\n"
+        "/branded por qu\u00e9 somos m\u00e1s baratos que la competencia\n"
+        "/branded nuestro proceso paso a paso\n\n"
+        "MIEDOS:\n"
+        "/branded c\u00f3mo saber si un servicio de regularizaci\u00f3n es fiable\n"
+        "/branded qu\u00e9 pasa si mi solicitud es rechazada\n"
+        "/branded es seguro dar mis datos online\n\n"
+        "URGENCIA:\n"
+        "/branded cu\u00e1nto tiempo necesitas para preparar documentos\n"
+        "/branded no esperes a junio para empezar\n"
+        "/branded verifica gratis si cumples requisitos\n\n"
+        "COMUNIDAD:\n"
+        "/branded \u00fanete a miles que ya se est\u00e1n preparando\n"
+        "/branded historias de la regularizaci\u00f3n de 2005\n"
+        "/branded preguntas frecuentes que nos hacen cada d\u00eda\n\n"
+        "DIFERENCIADORES:\n"
+        "/branded IA que revisa tus documentos en minutos\n"
+        "/branded abogados reales detr\u00e1s de cada caso\n"
+        "/branded desde 199 euros todo incluido"
+    )
+    await update.message.reply_text(ideas)
 
 
 @team_only
@@ -4124,7 +4170,6 @@ async def handle_brand_it(update: Update, context: ContextTypes.DEFAULT_TYPE):
             media_type="carousel",
             model_version="4",
             n_posts=1,
-            use_brand_palette=True,
         )
 
         if not predis_result.get("ok"):
@@ -4551,7 +4596,6 @@ async def handle_publish_callback(
                             media_type="carousel",
                             model_version="4",
                             n_posts=1,
-                            use_brand_palette=True,
                         )
                         if predis_result.get("ok"):
                             p_id = predis_result["post_ids"][0]
@@ -4667,6 +4711,7 @@ def main():
     app.add_handler(CommandHandler("branded", cmd_branded))
     app.add_handler(CommandHandler("branded_image", cmd_branded_image))
     app.add_handler(CommandHandler("branded_video", cmd_branded_video))
+    app.add_handler(CommandHandler("branded_ideas", cmd_branded_ideas))
     app.add_handler(CommandHandler("predis_posts", cmd_predis_posts))
 
     # Predis review queue + Brand It callbacks (BEFORE catch-all)
