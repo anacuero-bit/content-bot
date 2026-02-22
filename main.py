@@ -290,7 +290,7 @@ async def predis_get_templates(media_type: str = None, page: int = 1) -> dict:
     return result
 
 
-async def predis_poll_until_complete(post_id: str, max_wait: int = 90, interval: int = 5) -> dict:
+async def predis_poll_until_complete(post_id: str, max_wait: int = 180, interval: int = 5) -> dict:
     """Poll Predis.ai until a specific post is completed or errors out.
 
     Args:
@@ -3788,7 +3788,7 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Step 3: Poll until completed
-        completed = await predis_poll_until_complete(post_id, max_wait=90, interval=5)
+        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
 
         if not completed.get("ok"):
             error = completed.get("error", "Unknown")
@@ -3893,7 +3893,7 @@ async def cmd_branded_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         post_id = predis_result.get("post_ids", [""])[0]
         await status_msg.edit_text(f"\u23f3 Rendering image... ({post_id[:12]})")
 
-        completed = await predis_poll_until_complete(post_id, max_wait=60, interval=4)
+        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=4)
 
         if not completed.get("ok"):
             await status_msg.edit_text("\u26a0\ufe0f Render timed out. Check predis.ai/app")
@@ -3966,7 +3966,7 @@ async def cmd_branded_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("\u23f3 Rendering video... (may take 60-120s)")
 
         # Videos take longer to render
-        completed = await predis_poll_until_complete(post_id, max_wait=120, interval=8)
+        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=8)
 
         if not completed.get("ok"):
             await status_msg.edit_text(
@@ -4090,7 +4090,7 @@ async def handle_brand_it(update: Update, context: ContextTypes.DEFAULT_TYPE):
         post_id = predis_result.get("post_ids", [""])[0]
         await status_msg.edit_text(f"\u23f3 Rendering... ({post_id[:12]})")
 
-        completed = await predis_poll_until_complete(post_id, max_wait=90, interval=5)
+        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
 
         if not completed.get("ok"):
             await status_msg.edit_text("\u26a0\ufe0f Timed out. Check predis.ai/app")
@@ -4510,7 +4510,7 @@ async def handle_publish_callback(
                         )
                         if predis_result.get("ok"):
                             p_id = predis_result["post_ids"][0]
-                            completed = await predis_poll_until_complete(p_id, max_wait=90, interval=5)
+                            completed = await predis_poll_until_complete(p_id, max_wait=180, interval=5)
                             if completed.get("ok"):
                                 p_urls = completed.get("urls", [])
                                 p_caption = (
