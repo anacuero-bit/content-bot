@@ -232,12 +232,16 @@ async def predis_create_content(
 
     headers = {"Authorization": PREDIS_API_KEY}
 
+    logger.info(f"Predis API request payload: {json.dumps(payload, indent=2, default=str)}")
+
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
             f"{PREDIS_BASE}/create_content/",
             data=payload,
             headers=headers,
         )
+
+    logger.info(f"Predis API response: {resp.status_code} {resp.text[:1000]}")
 
     if resp.status_code >= 400:
         logger.error(f"Predis API error {resp.status_code}: {resp.text[:500]}")
@@ -251,13 +255,18 @@ async def predis_create_content(
 async def predis_get_posts(page: int = 1) -> dict:
     """Get all generated posts from Predis.ai."""
     headers = {"Authorization": PREDIS_API_KEY}
+    params = {"brand_id": PREDIS_BRAND_ID, "page": page}
+
+    logger.info(f"Predis get_posts request: params={json.dumps(params, default=str)}")
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{PREDIS_BASE}/get_posts/",
             headers=headers,
-            params={"brand_id": PREDIS_BRAND_ID, "page": page},
+            params=params,
         )
+
+    logger.info(f"Predis get_posts response: {resp.status_code} {resp.text[:1000]}")
 
     if resp.status_code >= 400:
         logger.error(f"Predis get_posts error {resp.status_code}: {resp.text[:500]}")
@@ -275,12 +284,16 @@ async def predis_get_templates(media_type: str = None, page: int = 1) -> dict:
     if media_type:
         params["media_type"] = media_type
 
+    logger.info(f"Predis get_templates request: params={json.dumps(params, default=str)}")
+
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{PREDIS_BASE}/get_templates/",
             headers=headers,
             params=params,
         )
+
+    logger.info(f"Predis get_templates response: {resp.status_code} {resp.text[:1000]}")
 
     if resp.status_code >= 400:
         return {"ok": False, "error": resp.text[:200]}
@@ -3759,6 +3772,17 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
 
         # Step 2: Send to Predis.ai for branded rendering
+        debug_payload = {
+            "brand_id": PREDIS_BRAND_ID,
+            "text": carousel_text,
+            "media_type": "carousel",
+            "model_version": "4",
+            "n_posts": "1",
+            "input_language": "spanish",
+            "output_language": "spanish",
+            "color_palette_type": "brand",
+            "brand_details": TP26_BRAND_DETAILS,
+        }
         predis_result = await predis_create_content(
             text=carousel_text,
             media_type="carousel",
@@ -3766,6 +3790,15 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
             n_posts=1,
             use_brand_palette=True,
         )
+
+        # Temporary debug: echo payload to Telegram
+        try:
+            debug_str = json.dumps(debug_payload, indent=2, default=str)[:3000]
+            await update.message.reply_text(
+                f"\U0001f50d Debug payload:\n{debug_str}"
+            )
+        except Exception:
+            pass
 
         if not predis_result.get("ok"):
             error = predis_result.get("error", predis_result.get("errors", "Unknown error"))
