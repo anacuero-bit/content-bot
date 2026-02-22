@@ -11,6 +11,18 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.0.0-rc1 (2026-02-22)
+  - RENAME: /tiktok → /video with angle support + ad tier (_generate_premium_video)
+  - RENAME: /carousel → uses V4 Predis pipeline (cmd_carousel → cmd_carousel)
+  - RENAME: /fbpost → /fbtext with angle support
+  - RENAME: /tiktok5 → /video5
+  - ADD: _generate_premium_video() — 5 ad styles (testimonio, contraste, cuenta_atrás, cascada, mini_película)
+  - ADD: handle_all_callbacks() — unified callback router (pa_/pr_ approval + legacy)
+  - ADD: Angle support for /whatsapp
+  - DEL: /caption, /story, /scan, /topics, /phase, /backfill batch commands
+  - DEL: /branded, /branded_image, /branded_video, /branded_ideas, /predis_setup, /predis_posts
+  - DEL: /carousel3, /captions10, /whatsapp5, /fbpost5, /stories7
+
 v4.0.0-beta (2026-02-22)
   - ADD: send_predis_approval() — unified Predis approval workflow with review checklist
   - ADD: _predis_command_handler() — shared pipeline: angle → prompt → Claude → Predis → review
@@ -1146,8 +1158,8 @@ NEVER SAY:
             '"word_count": number}'
         ),
         "tiktok": (
-            "\nCONTENT TYPE: TIKTOK SCRIPT\n"
-            "Write a TikTok script for 15-30 seconds.\n\n"
+            "\nCONTENT TYPE: VIDEO SCRIPT\n"
+            "Write a script for an ad video for social media (TikTok/Instagram Reels) for 15-30 seconds.\n\n"
             "TARGET DURATION: 20-30 seconds (25 seconds ideal).\n"
             "SCRIPT LENGTH: Maximum 75 words of spoken text. Fewer is better.\n"
             "PACING: Hook in first 2 seconds. One clear idea per video. No rambling.\n\n"
@@ -1159,7 +1171,7 @@ NEVER SAY:
             "NEVER exceed 30 seconds or 75 words. Shorter = higher completion rate = more views.\n\n"
             "After the main JSON fields, also include a field called 'invideo_prompt' — "
             "this is a ready-to-paste prompt for InVideo AI. The prompt MUST follow this exact format:\n\n"
-            "Create a [DURATION]-second vertical TikTok video in European Spanish (Spain). "
+            "Create a [DURATION]-second vertical ad video for social media (TikTok/Instagram Reels) in European Spanish (Spain). "
             "(DURATION must be 15-30 seconds, never more.)\n\n"
             "VOICEOVER SCRIPT: \"[paste the full script here]\"\n\n"
             "VOICE: Female, European Spanish (Castilian accent). Warm, measured pace — not fast. "
@@ -1173,6 +1185,7 @@ NEVER SAY:
             "MUSIC: Subtle documentary-style background music, 15% volume.\n\n"
             "FORMAT: 9:16 vertical, 1080x1920. Style: professional, warm, trustworthy. "
             "Fast-paced cuts every 3-5 seconds. Total duration: 15-30 seconds MAX.\n\n"
+            "BRANDING: This is a promotional ad for tuspapeles2026.es. Include brand logo placement.\n\n"
             "The invideo_prompt should be a single string ready to paste directly into InVideo AI "
             "with zero editing needed.\n\n"
             "IMPORTANT: Return ONLY valid JSON with this exact structure:\n"
@@ -2631,24 +2644,160 @@ async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ Error generating blog: {e}")
 
 
+async def _generate_premium_video(update, context, user_topic):
+    """Generate a premium emotional ad video script (ad angle)."""
+    topic = pick_topic("tiktok", user_topic if user_topic else None)
+
+    wait_msg = await update.message.reply_text(
+        "\U0001f3ac\u2728 Generando ANUNCIO PREMIUM..."
+    )
+
+    premium_prompt = (
+        "Genera un guión para un ANUNCIO EMOCIONAL de vídeo corto para redes sociales "
+        "(TikTok/Instagram Reels) en español (España) sobre: " + topic + "\n\n"
+        "ESTO NO ES UN EXPLAINER. Es un ANUNCIO EMOCIONAL tipo TV.\n\n"
+        "ELIGE UNO de estos 5 estilos:\n"
+        "1. TESTIMONIO: Historia en primera persona. 'Yo llegué a España hace 3 años...'\n"
+        "2. CONTRASTE: Vida sin papeles vs vida con papeles. Dos realidades.\n"
+        "3. CUENTA ATRÁS: Reloj, fechas, urgencia. 'Quedan X semanas...'\n"
+        "4. CASCADA: Cascada de preguntas que el espectador se hace. '¿Y si...?'\n"
+        "5. MINI PELÍCULA: Un día en la vida de alguien preparándose.\n\n"
+        "REGLAS:\n"
+        "- 20-30 segundos de duración\n"
+        "- Máximo 75 palabras habladas\n"
+        "- Abre con EMOCIÓN, no con información\n"
+        "- Arco narrativo: emoción → tensión → resolución → acción\n"
+        "- Línea de cierre memorable\n"
+        "- Momentos de silencio/pausa para impacto\n"
+        "- BRANDING: Esto es un anuncio para tuspapeles2026.es. Incluir logo.\n\n"
+        "CONTEXTO: tuspapeles2026.es — regularización 2026, desde €199, "
+        "IA + abogados reales, 5 meses residencia, abril-junio, 80-90% aprobación.\n\n"
+        "Devuelve SOLO JSON válido con esta estructura:\n"
+        '{"ad_style": "testimonio|contraste|cuenta_atras|cascada|mini_pelicula", '
+        '"duration_seconds": number (20-30), '
+        '"hook": "string (primeros 2 segundos — pura emoción)", '
+        '"script": "string (guión hablado completo — máx 75 palabras)", '
+        '"visual_direction": "string (descripción de escenas y transiciones)", '
+        '"closing_line": "string (línea de cierre memorable)", '
+        '"text_overlays": ["string", "string", "string"], '
+        '"music_mood": "string (estado de ánimo de la música)", '
+        '"invideo_prompt": "string (prompt completo para InVideo AI — '
+        "debe empezar con 'Create a [DURATION]-second vertical ad video for social media' "
+        "y terminar con 'BRANDING: This is a promotional ad for tuspapeles2026.es. "
+        "Include brand logo placement.')\"}"
+    )
+
+    try:
+        result = await generate_content(
+            "tiktok", topic, override_prompt=premium_prompt,
+        )
+
+        # Try to parse as JSON
+        data = None
+        if isinstance(result, str):
+            text = result.strip()
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start != -1 and end > start:
+                try:
+                    data = json.loads(text[start:end])
+                except json.JSONDecodeError:
+                    pass
+
+        await wait_msg.delete()
+
+        if data and isinstance(data, dict):
+            # Format nicely
+            style = data.get("ad_style", "?")
+            duration = data.get("duration_seconds", "?")
+            hook = data.get("hook", "")
+            script = data.get("script", "")
+            visual = data.get("visual_direction", "")
+            closing = data.get("closing_line", "")
+            overlays = data.get("text_overlays", [])
+            music = data.get("music_mood", "")
+            invideo = data.get("invideo_prompt", "")
+
+            overlays_text = "\n".join(
+                f"  {i+1}. {escape_md(o)}" for i, o in enumerate(overlays)
+            ) if overlays else "  (none)"
+
+            formatted = (
+                f"\U0001f3ac\u2728 *ANUNCIO PREMIUM*\n\n"
+                f"*Estilo:* {escape_md(style)}\n"
+                f"*Duración:* ~{duration}s\n\n"
+                f"\U0001f3af *HOOK (2s):*\n\"{escape_md(hook)}\"\n\n"
+                f"\U0001f4dd *GUIÓN:*\n\"{escape_md(script)}\"\n\n"
+                f"\U0001f3ac *DIRECCIÓN VISUAL:*\n{escape_md(visual)}\n\n"
+                f"\U0001f3ac *CIERRE:*\n\"{escape_md(closing)}\"\n\n"
+                f"\U0001f4f1 *TEXT OVERLAYS:*\n{overlays_text}\n\n"
+                f"\U0001f3b5 *MÚSICA:* {escape_md(music)}"
+            )
+
+            if invideo:
+                formatted += (
+                    f"\n\n---INVIDEO PROMPT (paste into invideo.ai)---\n"
+                    f"{escape_md(invideo)}\n"
+                    f"---END---"
+                )
+
+            post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
+            pending_channel_posts[post_id] = {"type": "tiktok", "data": data}
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "\U0001f4e2 Publicar en canal",
+                    callback_data=f"chpost_{post_id}",
+                )
+            ]])
+            await send_long_message(update, formatted, context, reply_markup=markup)
+        else:
+            # Fallback: raw text
+            raw = result if isinstance(result, str) else str(result)
+            formatted = (
+                f"\U0001f3ac\u2728 *ANUNCIO PREMIUM*\n\n"
+                f"{escape_md(raw[:3500])}"
+            )
+            await send_long_message(update, formatted, context)
+
+        log_content("video_ad", "ad", topic, "invideo")
+
+    except Exception as e:
+        logger.error(f"Premium video error: {e}")
+        await wait_msg.edit_text(f"\u274c Error generando anuncio premium: {e}")
+
+
 @team_only
-async def cmd_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /tiktok [topic] command."""
-    user_topic = " ".join(context.args) if context.args else None
-    topic = pick_topic("tiktok", user_topic)
-    wait_msg = await update.message.reply_text("⏳ Generating TikTok script...")
+async def cmd_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /video [angle] [topic] — generate video script with angle support."""
+    args = context.args if context.args else []
+    angle, user_topic = parse_angle_and_topic(args)
+
+    # Ad angle → premium video pipeline
+    if angle == "ad":
+        await _generate_premium_video(update, context, user_topic)
+        return
+
+    topic = pick_topic("tiktok", user_topic if user_topic else None)
+    angle_label = f" [\U0001f3af {angle}]" if angle else ""
+    wait_msg = await update.message.reply_text(f"\u23f3 Generating video script{angle_label}...")
     try:
         data = await generate_content("tiktok", topic)
         formatted = format_tiktok_for_telegram(data)
         post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
         pending_channel_posts[post_id] = {"type": "tiktok", "data": data}
         markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+            InlineKeyboardButton("\U0001f4e2 Publicar en canal", callback_data=f"chpost_{post_id}")
         ]])
         await wait_msg.delete()
         await send_long_message(update, formatted, context, reply_markup=markup)
+        log_content("video", angle, topic, "invideo")
     except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating TikTok: {e}")
+        await wait_msg.edit_text(f"\u274c Error generating video: {e}")
 
 
 async def _send_carousel_media(chat_id: int, carousel_data: dict, context: ContextTypes.DEFAULT_TYPE):
@@ -2693,167 +2842,62 @@ async def _send_carousel_media(chat_id: int, carousel_data: dict, context: Conte
         )
 
 
-@team_only
-async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /carousel [topic] command."""
-    user_topic = " ".join(context.args) if context.args else None
-    topic = pick_topic("carousel", user_topic)
-    wait_msg = await update.message.reply_text("⏳ Generating carousel...")
-    try:
-        data = await generate_content("carousel", topic)
-        formatted = format_carousel_for_telegram(data)
-        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
-        pending_channel_posts[post_id] = {"type": "carousel", "data": data}
-
-        # Build Brand It button (store carousel text for Predis rendering)
-        buttons_row = [
-            InlineKeyboardButton("\U0001f4e2 Publicar en canal", callback_data=f"chpost_{post_id}")
-        ]
-        if PREDIS_API_KEY and PREDIS_BRAND_ID:
-            carousel_topic_key = hashlib.md5(topic.encode()).hexdigest()[:16]
-            # Build plain text from carousel data for Predis
-            slides = data.get("slides", [])
-            text_parts = [data.get("topic", topic)]
-            for s in slides:
-                title = s.get("title", s.get("headline", ""))
-                if title:
-                    text_parts.append(title)
-                for b in s.get("bullets", []):
-                    text_parts.append(b)
-            carousel_plain_text = ". ".join(text_parts)
-            pending_branded[carousel_topic_key] = {
-                "text": carousel_plain_text,
-                "topic": topic,
-                "chat_id": update.effective_chat.id,
-            }
-            buttons_row.append(
-                InlineKeyboardButton(
-                    "\U0001f3a8 Brand It (Predis.ai)",
-                    callback_data=f"brand_it:{carousel_topic_key}",
-                )
-            )
-        markup = InlineKeyboardMarkup([buttons_row])
-        await wait_msg.delete()
-        await send_long_message(update, formatted, context, reply_markup=markup)
-
-        # Render and send images/video/PDF
-        try:
-            await _send_carousel_media(update.effective_chat.id, data, context)
-        except Exception as e:
-            logger.error(f"Carousel render failed: {e}")
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"⚠️ Imágenes no generadas: {e}\nTexto disponible arriba.",
-            )
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating carousel: {e}")
 
 
-@team_only
-async def cmd_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /caption [ig|fb] [topic] command."""
-    args = context.args if context.args else []
-    platform = ""
-    topic_parts = []
-
-    for arg in args:
-        if arg.lower() in ("ig", "instagram", "fb", "facebook"):
-            platform = "instagram" if arg.lower() in ("ig", "instagram") else "facebook"
-        else:
-            topic_parts.append(arg)
-
-    user_topic = " ".join(topic_parts)
-    if platform:
-        user_topic = f"for {platform}. {user_topic}" if user_topic else f"for {platform}"
-    topic = pick_topic("caption", user_topic if user_topic else None)
-
-    wait_msg = await update.message.reply_text("⏳ Generating caption...")
-    try:
-        data = await generate_content("caption", topic)
-        formatted = format_caption_for_telegram(data)
-        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
-        pending_channel_posts[post_id] = {"type": "caption", "data": data}
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
-        ]])
-        await wait_msg.delete()
-        await send_long_message(update, formatted, context, reply_markup=markup)
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating caption: {e}")
 
 
 @team_only
 async def cmd_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /whatsapp [type] command."""
-    msg_type = context.args[0] if context.args else ""
+    """Handle /whatsapp [angle] [type/topic] command."""
+    args = context.args if context.args else []
+    angle, remaining = parse_angle_and_topic(args)
+
     valid_types = ["news", "deadline", "educational", "referral", "re-engagement"]
+    msg_type = remaining.split()[0] if remaining else ""
     user_topic = None
     if msg_type in valid_types:
         user_topic = f"type: {msg_type}"
-    elif msg_type:
-        user_topic = msg_type
+    elif remaining:
+        user_topic = remaining
     topic = pick_topic("whatsapp", user_topic)
 
-    wait_msg = await update.message.reply_text("⏳ Generating WhatsApp message...")
+    angle_label = f" [\U0001f3af {angle}]" if angle else ""
+    wait_msg = await update.message.reply_text(f"\u23f3 Generating WhatsApp message{angle_label}...")
     try:
         data = await generate_content("whatsapp", topic)
         formatted = format_whatsapp_for_telegram(data)
         post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
         pending_channel_posts[post_id] = {"type": "whatsapp", "data": data}
         markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+            InlineKeyboardButton("\U0001f4e2 Publicar en canal", callback_data=f"chpost_{post_id}")
         ]])
         await wait_msg.delete()
         await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating WhatsApp message: {e}")
+        await wait_msg.edit_text(f"\u274c Error generating WhatsApp message: {e}")
 
 
 @team_only
-async def cmd_fbpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /fbpost [topic] command."""
-    user_topic = " ".join(context.args) if context.args else None
-    topic = pick_topic("fbpost", user_topic)
-    wait_msg = await update.message.reply_text("⏳ Generating Facebook post...")
+async def cmd_fbtext(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /fbtext [angle] [topic] — generate Facebook post with angle support."""
+    args = context.args if context.args else []
+    angle, user_topic = parse_angle_and_topic(args)
+    topic = pick_topic("fbpost", user_topic if user_topic else None)
+    angle_label = f" [\U0001f3af {angle}]" if angle else ""
+    wait_msg = await update.message.reply_text(f"\u23f3 Generating Facebook text{angle_label}...")
     try:
         data = await generate_content("fbpost", topic)
         formatted = format_fbpost_for_telegram(data)
         post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
         pending_channel_posts[post_id] = {"type": "fbpost", "data": data}
         markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
+            InlineKeyboardButton("\U0001f4e2 Publicar en canal", callback_data=f"chpost_{post_id}")
         ]])
         await wait_msg.delete()
         await send_long_message(update, formatted, context, reply_markup=markup)
     except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating FB post: {e}")
+        await wait_msg.edit_text(f"\u274c Error generating FB text: {e}")
 
-
-@team_only
-async def cmd_story(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /story [type] command."""
-    story_type = context.args[0] if context.args else ""
-    valid_types = ["poll", "question", "countdown", "quiz", "tip"]
-    user_topic = None
-    if story_type in valid_types:
-        user_topic = f"type: {story_type}"
-    elif story_type:
-        user_topic = story_type
-    topic = pick_topic("story", user_topic)
-
-    wait_msg = await update.message.reply_text("⏳ Generating Story concept...")
-    try:
-        data = await generate_content("story", topic)
-        formatted = format_story_for_telegram(data)
-        post_id = hashlib.md5(json.dumps(data, default=str).encode()).hexdigest()[:8]
-        pending_channel_posts[post_id] = {"type": "story", "data": data}
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Publicar en canal", callback_data=f"chpost_{post_id}")
-        ]])
-        await wait_msg.delete()
-        await send_long_message(update, formatted, context, reply_markup=markup)
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ Error generating Story: {e}")
 
 
 # ==============================================================================
@@ -2954,45 +2998,11 @@ async def _batch_generate(
 
 
 @team_only
-async def cmd_tiktok5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /tiktok5 — generate 5 TikTok scripts."""
+async def cmd_video5(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /video5 — generate 5 video scripts."""
     topics = pick_multiple_topics("tiktok", 5)
     await _batch_generate(update, context, "tiktok", 5, topics)
 
-
-@team_only
-async def cmd_carousel3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /carousel3 — generate 3 carousel sets."""
-    topics = pick_multiple_topics("carousel", 3)
-    await _batch_generate(update, context, "carousel", 3, topics)
-
-
-@team_only
-async def cmd_captions10(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /captions10 — generate 10 captions."""
-    topics = pick_multiple_topics("caption", 10)
-    await _batch_generate(update, context, "caption", 10, topics)
-
-
-@team_only
-async def cmd_whatsapp5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /whatsapp5 — generate 5 WhatsApp messages."""
-    topics = pick_multiple_topics("whatsapp", 5)
-    await _batch_generate(update, context, "whatsapp", 5, topics)
-
-
-@team_only
-async def cmd_fbpost5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /fbpost5 — generate 5 Facebook posts."""
-    topics = pick_multiple_topics("fbpost", 5)
-    await _batch_generate(update, context, "fbpost", 5, topics)
-
-
-@team_only
-async def cmd_stories7(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stories7 — generate 7 Story concepts."""
-    topics = pick_multiple_topics("story", 7)
-    await _batch_generate(update, context, "story", 7, topics)
 
 
 # ==============================================================================
@@ -3194,29 +3204,6 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @team_only
-async def cmd_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /topics — generate 10 topic suggestions."""
-    wait_msg = await update.message.reply_text("⏳ Generating topic suggestions...")
-    try:
-        data = await generate_content("topics")
-        topics_list = data.get("topics", [])
-
-        text = f"💡 *10 TOPIC SUGGESTIONS* (Phase: {get_current_phase()})\n\n"
-        for i, t in enumerate(topics_list, 1):
-            formats = ", ".join(t.get("best_formats", []))
-            text += (
-                f"*{i}.* {escape_md(t.get('title', ''))}\n"
-                f"   📐 {escape_md(t.get('angle', ''))}\n"
-                f"   📱 Best for: {escape_md(formats)}\n\n"
-            )
-
-        await wait_msg.delete()
-        await send_long_message(update, text, context)
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ Error: {e}")
-
-
-@team_only
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats — show generation statistics."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -3256,37 +3243,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
-@team_only
-async def cmd_phase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /phase [phase_name] — override campaign phase."""
-    global phase_override
-
-    valid_phases = ["pre_boe", "boe_week", "apps_open", "final_push"]
-
-    if not context.args:
-        phase_override = None
-        await update.message.reply_text(
-            f"Phase reset to auto-detect: *{get_current_phase()}*",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
-
-    new_phase = context.args[0].lower()
-    if new_phase not in valid_phases:
-        await update.message.reply_text(
-            f"Invalid phase. Choose: {', '.join(valid_phases)}"
-        )
-        return
-
-    phase_override = new_phase
-    await update.message.reply_text(
-        f"Phase set to: *{phase_override}*",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
 
 # ==============================================================================
-# BACKFILL — LAUNCH ARTICLES
+# BACKFILL DATA (retained for reference, command removed)
 # ==============================================================================
 
 # 7 articles to backfill with their real historical dates
@@ -3429,104 +3388,6 @@ BACKFILL_ARTICLES = [
     },
 ]
 
-
-@team_only
-async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /backfill — generate and publish the 7 launch articles to TP repo."""
-    chat_id = update.effective_chat.id
-    repo = GITHUB_REPO_TP
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"📚 *BACKFILL: Publishing {len(BACKFILL_ARTICLES)} launch articles to {repo}*\n"
-             f"This will take a few minutes...",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
-    success = 0
-    for i, article in enumerate(BACKFILL_ARTICLES, 1):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"📝 {i}/{len(BACKFILL_ARTICLES)}: {article['title'][:50]}...",
-        )
-
-        try:
-            # Generate HTML body via Claude with legal facts in prompt
-            phase = get_current_phase()
-            system = get_system_prompt("blog", phase)
-            user_msg = article["prompt"]
-
-            response = await asyncio.to_thread(
-                claude.messages.create,
-                model="claude-sonnet-4-20250514",
-                max_tokens=3000,
-                system=system,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-
-            html_body = response.content[0].text.strip()
-            # Strip code blocks if present
-            if html_body.startswith("```"):
-                html_body = "\n".join(html_body.split("\n")[1:])
-                if html_body.endswith("```"):
-                    html_body = html_body[:-3]
-                html_body = html_body.strip()
-
-            # If Claude returned JSON instead of raw HTML, extract html_content
-            if html_body.startswith("{"):
-                try:
-                    parsed = json.loads(html_body)
-                    html_body = parsed.get("html_content", html_body)
-                except json.JSONDecodeError:
-                    pass
-
-            # Wrap in full HTML template with historical date
-            full_html = wrap_blog_html(
-                article["title"],
-                html_body,
-                article["meta"],
-                article["date_str"],
-                slug=article["slug"],
-                category=article.get("category", "noticias"),
-            )
-
-            # Push article HTML
-            file_path = f"blog/{article['slug']}.html"
-            commit_msg = f"Publish: {article['title']}"
-            pub_ok = await publish_to_github(repo, file_path, full_html, commit_msg)
-
-            if pub_ok:
-                # Update index.json with historical date
-                idx_ok = await update_blog_index(
-                    repo,
-                    article["slug"],
-                    article["title"],
-                    article["meta"],
-                    html_body,
-                    article["category"],
-                    date_override=article["date"],
-                )
-                status = "✅" if idx_ok else "⚠️ HTML ok, index failed"
-                success += 1
-            else:
-                status = "❌ publish failed"
-
-            await context.bot.send_message(chat_id=chat_id, text=f"  {status}")
-
-        except Exception as e:
-            logger.error(f"Backfill error for {article['slug']}: {e}")
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"  ❌ Error: {e}"
-            )
-
-        # Rate limit
-        await asyncio.sleep(2)
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"📚 *BACKFILL COMPLETE* — {success}/{len(BACKFILL_ARTICLES)} articles published!",
-        parse_mode=ParseMode.MARKDOWN,
-    )
 
 
 # ==============================================================================
@@ -3851,13 +3712,6 @@ async def auto_scan_news(bot=None):
                 logger.error(f"Failed to alert chat {chat_id}: {e}")
 
 
-@team_only
-async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /scan — force immediate news scan."""
-    wait_msg = await update.message.reply_text("🔍 Scanning for new headlines...")
-    await auto_scan_news(bot=context.bot)
-    await wait_msg.edit_text("✅ News scan complete. Any new items were sent above.")
-
 
 # ==============================================================================
 # V4 PREDIS APPROVAL WORKFLOW
@@ -3940,59 +3794,6 @@ async def send_predis_approval(update, context, post_id, post_data, media_label,
     }
 
     return msg
-
-
-async def handle_v4_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle V4 approval/rejection callbacks (pa_* and pr_*)."""
-    query = update.callback_query
-    await query.answer()
-
-    msg_id = query.message.message_id
-    data = query.data  # "pa_<postid>" or "pr_<postid>"
-
-    is_approve = data.startswith("pa_")
-    post_id_fragment = data[3:]
-
-    if msg_id not in predis_review_queue:
-        await query.edit_message_text("\u26a0\ufe0f Este item de review ha expirado (bot reiniciado).")
-        return
-
-    item = predis_review_queue.pop(msg_id)
-
-    if not is_approve:
-        await query.edit_message_text(
-            f"\u274c <b>Rechazado y descartado.</b>\n\n"
-            f"Tipo: {item.get('media_type', '?')}\n"
-            f"Predis ID: <code>{item['post_id']}</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        # Update content log if we can find the entry
-        for entry in reversed(content_log):
-            if entry.get("predis_post_id") == item["post_id"]:
-                entry["approved"] = False
-                save_content_log()
-                break
-        return
-
-    await query.edit_message_text(
-        f"\u2705 <b>\u00a1Aprobado!</b>\n\n"
-        f"El contenido est\u00e1 en tu dashboard de Predis.ai listo para programar.\n\n"
-        f"\U0001f4cc <b>Siguientes pasos:</b>\n"
-        f"1. Abre predis.ai/app\n"
-        f"2. Busca este post en tu biblioteca de contenido\n"
-        f"3. Programa o publica en tus cuentas conectadas\n\n"
-        f"Predis ID: <code>{item['post_id']}</code>\n"
-        f"Tipo: {item.get('media_type', '?')}\n"
-        f"Media: {len(item.get('media_urls', []))} archivo(s)",
-        parse_mode=ParseMode.HTML,
-    )
-
-    # Update content log
-    for entry in reversed(content_log):
-        if entry.get("predis_post_id") == item["post_id"]:
-            entry["approved"] = True
-            save_content_log()
-            break
 
 
 async def _predis_command_handler(
@@ -4128,7 +3929,7 @@ async def _predis_command_handler(
 
 
 @team_only
-async def cmd_carousel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_carousel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /cr [angle] [topic] — generate branded carousel via V4 pipeline."""
     await _predis_command_handler(
         update, context,
@@ -4320,452 +4121,6 @@ async def handle_predis_review(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-@team_only
-async def cmd_predis_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Verify Predis.ai API connection and show configuration."""
-    if not PREDIS_API_KEY:
-        await update.message.reply_text(
-            "\u274c <b>PREDIS_API_KEY not set.</b>\n\n"
-            "1. Sign up at predis.ai (Rise plan for auto-posting)\n"
-            "2. Go to Pricing & Account \u2192 Rest API\n"
-            "3. Generate your API key\n"
-            "4. Add PREDIS_API_KEY to Railway env vars\n"
-            "5. Restart the bot",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    if not PREDIS_BRAND_ID:
-        await update.message.reply_text(
-            "\u274c <b>PREDIS_BRAND_ID not set.</b>\n\n"
-            "1. Go to predis.ai \u2192 Manage Brand\n"
-            "2. Set up your brand:\n"
-            "   \u2022 Name: tuspapeles2026\n"
-            "   \u2022 Logo: upload tp26sqlogo.jpg\n"
-            "   \u2022 Color 1: #1B3A5C (Deep Blue)\n"
-            "   \u2022 Color 2: #D4A843 (Gold)\n"
-            "   \u2022 Color 3: #FFFFFF (White)\n"
-            "   \u2022 Website: tuspapeles2026.es\n"
-            "3. Go to Pricing & Account \u2192 Brands\n"
-            "4. Copy your Brand ID\n"
-            "5. Add PREDIS_BRAND_ID to Railway env vars\n"
-            "6. Restart the bot",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    status_msg = await update.message.reply_text("\U0001f504 Checking Predis.ai connection...")
-
-    # Test API by fetching posts (lightweight check)
-    result = await predis_get_posts(page=1)
-
-    if not result.get("ok"):
-        error = result.get("error", "Unknown error")
-        await status_msg.edit_text(
-            f"\u274c <b>Predis API error:</b>\n<code>{error}</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    post_count = len(result.get("posts", []))
-    total_pages = result.get("total_pages", 0)
-
-    lines = [
-        "\u2705 <b>Predis.ai Connected!</b>\n",
-        f"\U0001f194 <b>Brand ID:</b> <code>{PREDIS_BRAND_ID[:12]}...</code>",
-        f"\U0001f4dd <b>Posts in library:</b> {post_count} (page 1 of {total_pages})",
-        "",
-        "\U0001f3a8 <b>Brand Config (injected per request):</b>",
-        "  \U0001f535 Color 1: #1B3A5C (Deep Blue)",
-        "  \U0001f7e1 Color 2: #D4A843 (Gold)",
-        "  \u26aa Color 3: #FFFFFF (White)",
-        "  \U0001f310 Website: tuspapeles2026.es",
-        "  \U0001f4f1 Handle: @tuspapeles2026",
-        "",
-        "\U0001f4a1 <b>Also set up in Predis dashboard:</b>",
-        "  \u2022 Upload logo (tp26sqlogo.jpg)",
-        "  \u2022 Set brand colors in Manage Brand",
-        "  \u2022 Connect social accounts (IG/TikTok/YT/FB)",
-        "  \u2022 Enable auto-posting (Rise plan feature)",
-        "",
-        "Ready! Try: <code>/branded regularizaci\u00f3n 2026 requisitos</code>",
-    ]
-
-    await status_msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
-
-
-@team_only
-async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate branded carousel via Claude + Predis.ai. Usage: /branded <topic>"""
-    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
-        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
-        return
-
-    topic = " ".join(context.args) if context.args else None
-    if not topic:
-        await update.message.reply_text(
-            "Usage: <code>/branded &lt;topic&gt;</code>\n\n"
-            "Examples:\n"
-            "  <code>/branded 5 meses no a\u00f1os para la regularizaci\u00f3n</code>\n"
-            "  <code>/branded documentos que sirven como prueba de residencia</code>\n"
-            "  <code>/branded mitos sobre la regularizaci\u00f3n 2026</code>\n"
-            "  <code>/branded comparaci\u00f3n 2005 vs 2026</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f9e0 Generating condensed prompt with Claude...")
-
-    try:
-        # Step 1: Claude generates a condensed prompt (<850 chars) for Predis
-        response = await asyncio.to_thread(
-            claude.messages.create,
-            model="claude-sonnet-4-20250514",
-            max_tokens=600,
-            messages=[{"role": "user", "content": BRANDED_PROMPT.format(topic=topic)}],
-        )
-
-        branded_text = response.content[0].text.strip()
-
-        if len(branded_text) < 30:
-            await status_msg.edit_text("\u274c Claude returned too little text. Try a different topic.")
-            return
-
-        # Hard limit: Predis rejects text > 1000 chars
-        if len(branded_text) > 1000:
-            branded_text = branded_text[:950] + "... tuspapeles2026.es"
-            logger.warning(f"Branded text truncated to {len(branded_text)} chars")
-
-        logger.info(f"Branded text ({len(branded_text)} chars): {branded_text[:200]}...")
-
-        await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
-
-        # Step 2: Send condensed text to Predis for branded rendering
-        predis_result = await predis_create_content(
-            text=branded_text,
-            media_type="carousel",
-            model_version="4",
-            n_posts=1,
-        )
-
-        if not predis_result.get("ok"):
-            error = predis_result.get("error", predis_result.get("errors", "Unknown error"))
-            await status_msg.edit_text(
-                f"\u274c <b>Predis API error:</b>\n<code>{str(error)[:300]}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        post_ids = predis_result.get("post_ids", [])
-        if not post_ids:
-            await status_msg.edit_text("\u274c No post ID returned from Predis.")
-            return
-
-        post_id = post_ids[0]
-        await status_msg.edit_text(
-            f"\u23f3 Rendering... (ID: <code>{post_id[:12]}</code>)\n"
-            f"This takes 15-60 seconds.",
-            parse_mode=ParseMode.HTML,
-        )
-
-        # Step 3: Poll until completed
-        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
-
-        if not completed.get("ok"):
-            error = completed.get("error", "Unknown")
-            await status_msg.edit_text(
-                f"\u26a0\ufe0f <b>Render timed out or failed.</b>\n\n"
-                f"Predis ID: <code>{post_id}</code>\n"
-                f"Error: {error}\n\n"
-                f"Check predis.ai/app for the content \u2014 it may still be processing.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        # Step 4: Get media URLs and caption
-        media_urls = completed.get("urls", [])
-
-        if not media_urls:
-            await status_msg.edit_text(
-                f"\u26a0\ufe0f Render completed but no media URLs returned.\n"
-                f"Check predis.ai/app for Predis ID: <code>{post_id}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        await status_msg.edit_text(
-            f"\u2705 {len(media_urls)} slides rendered! Sending to review..."
-        )
-
-        # Step 5: Build social caption with hashtags
-        social_caption = (
-            f"\U0001f4cb {topic}\n\n"
-            f"La regularizaci\u00f3n 2026 abre en abril. "
-            f"\u00bfCumples los requisitos? Verif\u00edcalo gratis.\n\n"
-            f"\U0001f449 Link en bio \u2192 tuspapeles2026.es\n\n"
-            f"#regularizacion2026 #papeles2026 #sinpapeles #regularizacion "
-            f"#extranjerosEspa\u00f1a #inmigrantes #residenciaEspa\u00f1a #tuspapeles "
-            f"#regularizacionextraordinaria #decretoderegularizacion"
-        )
-
-        # Step 6: Send to review queue
-        await send_predis_to_review(
-            bot=context.bot,
-            chat_id=chat_id,
-            post_id=post_id,
-            caption=social_caption,
-            media_urls=media_urls,
-            media_type="carousel",
-            source=f"branded: {topic[:50]}",
-        )
-
-    except Exception as e:
-        logger.error(f"Branded carousel error: {e}", exc_info=True)
-        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
-
-
-@team_only
-async def cmd_branded_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate branded single image via Claude + Predis.ai. Usage: /branded_image <topic>"""
-    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
-        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
-        return
-
-    topic = " ".join(context.args) if context.args else None
-    if not topic:
-        await update.message.reply_text(
-            "Usage: <code>/branded_image &lt;topic&gt;</code>\n\n"
-            "Generates a single branded image post for Instagram/Facebook.\n\n"
-            "Example: <code>/branded_image dato clave: 5 meses no a\u00f1os</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f9e0 Generating image prompt with Claude...")
-
-    try:
-        response = await asyncio.to_thread(
-            claude.messages.create,
-            model="claude-sonnet-4-20250514",
-            max_tokens=400,
-            messages=[{"role": "user", "content": BRANDED_IMAGE_PROMPT.format(topic=topic)}],
-        )
-
-        image_text = response.content[0].text.strip()
-
-        if len(image_text) > 1000:
-            image_text = image_text[:950] + "... tuspapeles2026.es"
-            logger.warning(f"Image text truncated to {len(image_text)} chars")
-
-        logger.info(f"Image text ({len(image_text)} chars): {image_text[:200]}...")
-
-        await status_msg.edit_text("\U0001f3a8 Rendering branded image via Predis.ai...")
-
-        predis_result = await predis_create_content(
-            text=image_text,
-            media_type="single_image",
-            model_version="4",
-            n_posts=1,
-        )
-
-        if not predis_result.get("ok"):
-            error = predis_result.get("error", predis_result.get("errors", "Unknown"))
-            await status_msg.edit_text(f"\u274c Predis error: {str(error)[:300]}")
-            return
-
-        post_id = predis_result.get("post_ids", [""])[0]
-        await status_msg.edit_text(f"\u23f3 Rendering image... ({post_id[:12]})")
-
-        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=4)
-
-        if not completed.get("ok"):
-            await status_msg.edit_text("\u26a0\ufe0f Render timed out. Check predis.ai/app")
-            return
-
-        media_urls = completed.get("urls", [])
-        caption = (
-            f"{topic}\n\n"
-            f"\U0001f449 tuspapeles2026.es\n\n"
-            f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
-        )
-
-        await send_predis_to_review(
-            bot=context.bot,
-            chat_id=chat_id,
-            post_id=post_id,
-            caption=caption,
-            media_urls=media_urls,
-            media_type="single_image",
-            source=f"branded_image: {topic[:40]}",
-        )
-
-    except Exception as e:
-        logger.error(f"Branded image error: {e}", exc_info=True)
-        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
-
-
-@team_only
-async def cmd_branded_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate branded short video via Predis.ai. Usage: /branded_video <topic>"""
-    if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
-        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
-        return
-
-    topic = " ".join(context.args) if context.args else None
-    if not topic:
-        await update.message.reply_text(
-            "Usage: <code>/branded_video &lt;topic&gt;</code>\n\n"
-            "Generates a branded short video for TikTok/Reels.\n"
-            "\u26a0\ufe0f Uses model v2 (video not supported on v4). Quality may vary.\n\n"
-            "Example: <code>/branded_video 3 mitos sobre la regularizaci\u00f3n</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f9e0 Generating video prompt with Claude...")
-
-    try:
-        response = await asyncio.to_thread(
-            claude.messages.create,
-            model="claude-sonnet-4-20250514",
-            max_tokens=400,
-            messages=[{"role": "user", "content": BRANDED_VIDEO_PROMPT.format(topic=topic)}],
-        )
-
-        video_text = response.content[0].text.strip()
-
-        if len(video_text) > 1000:
-            video_text = video_text[:950] + "... tuspapeles2026.es"
-            logger.warning(f"Video text truncated to {len(video_text)} chars")
-
-        logger.info(f"Video text ({len(video_text)} chars): {video_text[:200]}...")
-
-        await status_msg.edit_text("\U0001f3ac Rendering branded video via Predis.ai (this takes longer)...")
-
-        predis_result = await predis_create_content(
-            text=video_text,
-            media_type="video",
-            model_version="2",
-            n_posts=1,
-        )
-
-        if not predis_result.get("ok"):
-            error = predis_result.get("error", predis_result.get("errors", "Unknown"))
-            await status_msg.edit_text(f"\u274c Predis error: {str(error)[:300]}")
-            return
-
-        post_id = predis_result.get("post_ids", [""])[0]
-        await status_msg.edit_text("\u23f3 Rendering video... (may take 60-120s)")
-
-        # Videos take longer to render
-        completed = await predis_poll_until_complete(post_id, max_wait=180, interval=8)
-
-        if not completed.get("ok"):
-            await status_msg.edit_text(
-                f"\u26a0\ufe0f Video render timed out.\n"
-                f"Check predis.ai/app \u2014 ID: <code>{post_id}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        media_urls = completed.get("urls", [])
-        caption = (
-            f"{topic}\n\n"
-            f"La regularizaci\u00f3n 2026 abre en abril. "
-            f"\u00bfCumples los requisitos? Verif\u00edcalo gratis.\n\n"
-            f"\U0001f449 Link en bio \u2192 tuspapeles2026.es\n\n"
-            f"#regularizacion2026 #papeles2026 #sinpapeles #tuspapeles"
-        )
-
-        await send_predis_to_review(
-            bot=context.bot,
-            chat_id=chat_id,
-            post_id=post_id,
-            caption=caption,
-            media_urls=media_urls,
-            media_type="video",
-            source=f"branded_video: {topic[:40]}",
-        )
-
-    except Exception as e:
-        logger.error(f"Branded video error: {e}", exc_info=True)
-        await status_msg.edit_text(f"\u274c Error: {str(e)[:300]}")
-
-
-@team_only
-async def cmd_branded_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List ready-to-use topic ideas for /branded commands."""
-    ideas = (
-        "\U0001f4a1 Ideas para /branded:\n\n"
-        "QUI\u00c9NES SOMOS:\n"
-        "/branded qui\u00e9nes somos y c\u00f3mo te ayudamos\n"
-        "/branded por qu\u00e9 somos m\u00e1s baratos que la competencia\n"
-        "/branded nuestro proceso paso a paso\n\n"
-        "MIEDOS:\n"
-        "/branded c\u00f3mo saber si un servicio de regularizaci\u00f3n es fiable\n"
-        "/branded qu\u00e9 pasa si mi solicitud es rechazada\n"
-        "/branded es seguro dar mis datos online\n\n"
-        "URGENCIA:\n"
-        "/branded cu\u00e1nto tiempo necesitas para preparar documentos\n"
-        "/branded no esperes a junio para empezar\n"
-        "/branded verifica gratis si cumples requisitos\n\n"
-        "COMUNIDAD:\n"
-        "/branded \u00fanete a miles que ya se est\u00e1n preparando\n"
-        "/branded historias de la regularizaci\u00f3n de 2005\n"
-        "/branded preguntas frecuentes que nos hacen cada d\u00eda\n\n"
-        "DIFERENCIADORES:\n"
-        "/branded IA que revisa tus documentos en minutos\n"
-        "/branded abogados reales detr\u00e1s de cada caso\n"
-        "/branded desde 199 euros todo incluido"
-    )
-    await update.message.reply_text(ideas)
-
-
-@team_only
-async def cmd_predis_posts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List recent Predis.ai generated content."""
-    if not PREDIS_API_KEY:
-        await update.message.reply_text("\u274c Predis not configured. Run /predis_setup")
-        return
-
-    await update.message.reply_text("\U0001f4cb Fetching Predis content library...")
-
-    result = await predis_get_posts(page=1)
-    if not result.get("ok"):
-        await update.message.reply_text(f"\u274c Error: {result.get('error', 'Unknown')}")
-        return
-
-    posts = result.get("posts", [])
-    total_pages = result.get("total_pages", 0)
-
-    if not posts:
-        await update.message.reply_text("\U0001f4ed No posts in Predis library yet. Try /branded <topic>")
-        return
-
-    lines = [f"\U0001f4cb <b>Predis Content Library</b> (page 1/{total_pages})\n"]
-
-    for i, post in enumerate(posts[:10], 1):
-        post_id = post.get("post_id", "?")[:10]
-        media_type = post.get("media_type", "?")
-        caption = post.get("caption", "No caption")[:50]
-        urls = post.get("urls", [])
-        url_count = len(urls)
-
-        type_emoji = {
-            "carousel": "\U0001f4ca",
-            "single_image": "\U0001f5bc",
-            "video": "\U0001f3ac",
-        }.get(media_type, "\U0001f4e6")
-
-        lines.append(
-            f"{i}. {type_emoji} <code>{post_id}...</code> \u2014 {media_type} ({url_count} files)\n"
-            f"   {caption}..."
-        )
-
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def handle_brand_it(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5299,6 +4654,74 @@ async def handle_publish_callback(
 
 
 # ==============================================================================
+# UNIFIED CALLBACK ROUTER
+# ==============================================================================
+
+
+async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route all callback queries to appropriate handlers."""
+    query = update.callback_query
+    data = query.data or ""
+
+    # V4 approval: pa_ = approve, pr_ = reject
+    if data.startswith("pa_"):
+        await query.answer()
+        post_id_fragment = data[3:]
+
+        # Update content log
+        for entry in reversed(content_log):
+            pid = entry.get("predis_post_id") or ""
+            if pid.startswith(post_id_fragment) or post_id_fragment in pid:
+                entry["approved"] = True
+                save_content_log()
+                break
+
+        # Also handle review queue if present
+        msg_id = query.message.message_id
+        if msg_id in predis_review_queue:
+            predis_review_queue.pop(msg_id)
+
+        await query.edit_message_text(
+            "\u2705 Aprobado \u2014 se publica en pr\u00f3ximo horario",
+        )
+        return
+
+    if data.startswith("pr_"):
+        await query.answer()
+        post_id_fragment = data[3:]
+
+        # Update content log
+        for entry in reversed(content_log):
+            pid = entry.get("predis_post_id") or ""
+            if pid.startswith(post_id_fragment) or post_id_fragment in pid:
+                entry["approved"] = False
+                save_content_log()
+                break
+
+        msg_id = query.message.message_id
+        if msg_id in predis_review_queue:
+            predis_review_queue.pop(msg_id)
+
+        await query.edit_message_text(
+            "\u274c Rechazado \u2014 \u26a0\ufe0f elimina manualmente en predis.ai/app",
+        )
+        return
+
+    # Legacy Predis review (predis_approve:/predis_reject:)
+    if data.startswith(f"{PREDIS_APPROVE}:") or data.startswith(f"{PREDIS_REJECT}:"):
+        await handle_predis_review(update, context)
+        return
+
+    # Brand It callback
+    if data.startswith("brand_it:"):
+        await handle_brand_it(update, context)
+        return
+
+    # Everything else → legacy publish callback handler
+    await handle_publish_callback(update, context)
+
+
+# ==============================================================================
 # MAIN
 # ==============================================================================
 
@@ -5308,60 +4731,35 @@ def main():
     load_content_log()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Single generation commands
+    # Core commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+
+    # Content generation commands (V4)
     app.add_handler(CommandHandler("blog", cmd_blog))
-    app.add_handler(CommandHandler("tiktok", cmd_tiktok))
+    app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("carousel", cmd_carousel))
-    app.add_handler(CommandHandler("caption", cmd_caption))
+    app.add_handler(CommandHandler("image", cmd_image))
+    app.add_handler(CommandHandler("reel", cmd_reel))
+    app.add_handler(CommandHandler("meme", cmd_meme))
+    app.add_handler(CommandHandler("quote", cmd_quote))
     app.add_handler(CommandHandler("whatsapp", cmd_whatsapp))
-    app.add_handler(CommandHandler("fbpost", cmd_fbpost))
-    app.add_handler(CommandHandler("story", cmd_story))
+    app.add_handler(CommandHandler("fbtext", cmd_fbtext))
 
     # Batch generation commands
-    app.add_handler(CommandHandler("tiktok5", cmd_tiktok5))
-    app.add_handler(CommandHandler("carousel3", cmd_carousel3))
-    app.add_handler(CommandHandler("captions10", cmd_captions10))
-    app.add_handler(CommandHandler("whatsapp5", cmd_whatsapp5))
-    app.add_handler(CommandHandler("fbpost5", cmd_fbpost5))
-    app.add_handler(CommandHandler("stories7", cmd_stories7))
+    app.add_handler(CommandHandler("video5", cmd_video5))
 
     # Weekly mega-batch
     app.add_handler(CommandHandler("weekly", cmd_weekly))
 
     # Monitoring & tools
     app.add_handler(CommandHandler("news", cmd_news))
-    app.add_handler(CommandHandler("scan", cmd_scan))
-    app.add_handler(CommandHandler("topics", cmd_topics))
     app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("phase", cmd_phase))
-    app.add_handler(CommandHandler("backfill", cmd_backfill))
     app.add_handler(CommandHandler("articles", cmd_articles))
     app.add_handler(CommandHandler("delete", cmd_delete))
 
-    # Predis.ai branded content commands
-    app.add_handler(CommandHandler("predis_setup", cmd_predis_setup))
-    app.add_handler(CommandHandler("branded", cmd_branded))
-    app.add_handler(CommandHandler("branded_image", cmd_branded_image))
-    app.add_handler(CommandHandler("branded_video", cmd_branded_video))
-    app.add_handler(CommandHandler("branded_ideas", cmd_branded_ideas))
-    app.add_handler(CommandHandler("predis_posts", cmd_predis_posts))
-
-    # V4 media commands (angle-aware + Predis pipeline)
-    app.add_handler(CommandHandler("cr", cmd_carousel_new))
-    app.add_handler(CommandHandler("image", cmd_image))
-    app.add_handler(CommandHandler("reel", cmd_reel))
-    app.add_handler(CommandHandler("meme", cmd_meme))
-    app.add_handler(CommandHandler("quote", cmd_quote))
-
-    # Predis review queue + Brand It callbacks (BEFORE catch-all)
-    app.add_handler(CallbackQueryHandler(handle_predis_review, pattern=f"^({PREDIS_APPROVE}|{PREDIS_REJECT}):"))
-    app.add_handler(CallbackQueryHandler(handle_v4_approval, pattern="^p[ar]_"))
-    app.add_handler(CallbackQueryHandler(handle_brand_it, pattern="^brand_it:"))
-
-    # Callback handlers (publish buttons, weekly confirm, blog topic selection)
-    app.add_handler(CallbackQueryHandler(handle_publish_callback))
+    # Unified callback handler (routes pa_/pr_, predis review, brand_it, publish)
+    app.add_handler(CallbackQueryHandler(handle_all_callbacks))
 
     # Catch-all for non-team members
     app.add_handler(MessageHandler(filters.ALL, handle_unauthorized))
@@ -5384,7 +4782,7 @@ def main():
 
     app.post_init = post_init
 
-    logger.info("Content Bot v4.0-beta starting")
+    logger.info("Content Bot v4.0-rc1 starting")
     logger.info(f"Team IDs: {TEAM_CHAT_IDS}")
     logger.info(f"Phase: {get_current_phase()}")
     app.run_polling()
