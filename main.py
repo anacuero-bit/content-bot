@@ -183,13 +183,38 @@ PREDIS_BRAND_ID = os.getenv("PREDIS_BRAND_ID", "")
 
 # tuspapeles2026 brand details — injected into every Predis request
 TP26_BRAND_DETAILS = json.dumps({
-    "color_1": "#1B3A5C",
-    "color_2": "#D4A843",
-    "color_3": "#FFFFFF",
+    "color_1": "1B3A5C",
+    "color_2": "D4A843",
+    "color_3": "FFFFFF",
     "brand_name": "tuspapeles2026",
     "brand_handle": "@tuspapeles2026",
     "brand_website": "tuspapeles2026.es",
 })
+
+# Claude prompt for generating condensed branded text (<1000 chars for Predis limit)
+BRANDED_PROMPT = """Generate a concise social media post prompt in Spanish (Spain) about: {topic}
+
+This text will be used by an AI design tool to create a branded carousel AND its caption/hashtags for auto-posting to Instagram, TikTok, and Facebook. The tool uses this text to generate BOTH the visual slides AND the accompanying post caption and hashtags.
+
+RULES:
+- Maximum 850 characters total (HARD LIMIT — count carefully)
+- Structure the text so it works as both slide content AND caption context
+- Include ONLY these verified legal facts where relevant:
+  • 5 MONTHS continuous residence required (NOT years)
+  • Must have entered Spain before 31/12/2025
+  • NO job offer required — vulnerability clause presumes vulnerability
+  • 100% online process, no office visits
+  • Application window: April 1 – June 30, 2026
+  • Immediate provisional work permit upon filing
+  • 80-90% expected approval rate (based on 2005 precedent)
+  • All nationalities eligible
+- End with: tuspapeles2026.es | Desde €199 | @tuspapeles2026
+- Include these hashtag suggestions at the very end: #regularizacion2026 #sinpapeles #papeles2026 #tuspapeles
+- Tone: professional, hopeful, empathetic. NOT salesy.
+- Do NOT invent ANY legal facts not listed above
+- Do NOT use slide markers like [Slide 1] or **Slide 1:**
+- Do NOT use markdown formatting (no ** or ## etc)
+- Output ONLY the text, nothing else"""
 
 
 async def predis_create_content(
@@ -3732,19 +3757,36 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
+    status_msg = await update.message.reply_text("\U0001f9e0 Generating condensed prompt with Claude...")
 
     try:
-        # Build short prompt for Predis (it generates its own slide content)
-        predis_text = (
-            f"Información sobre {topic} - regularización extraordinaria España 2026. "
-            f"Requisitos, plazos y proceso. tuspapeles2026.es"
+        # Step 1: Claude generates a condensed prompt (<850 chars) for Predis
+        response = await asyncio.to_thread(
+            claude.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=600,
+            messages=[{"role": "user", "content": BRANDED_PROMPT.format(topic=topic)}],
         )
 
-        # Debug payload mirror (for Telegram echo)
+        branded_text = response.content[0].text.strip()
+
+        if len(branded_text) < 30:
+            await status_msg.edit_text("\u274c Claude returned too little text. Try a different topic.")
+            return
+
+        # Hard limit: Predis rejects text > 1000 chars
+        if len(branded_text) > 1000:
+            branded_text = branded_text[:950] + "... tuspapeles2026.es"
+            logger.warning(f"Branded text truncated to {len(branded_text)} chars")
+
+        logger.info(f"Branded text ({len(branded_text)} chars): {branded_text[:200]}...")
+
+        await status_msg.edit_text("\U0001f3a8 Rendering branded carousel via Predis.ai...")
+
+        # Step 2: Send condensed text to Predis for branded rendering
         debug_payload = {
             "brand_id": PREDIS_BRAND_ID,
-            "text": predis_text,
+            "text": branded_text,
             "media_type": "carousel",
             "model_version": "4",
             "n_posts": "1",
@@ -3755,7 +3797,7 @@ async def cmd_branded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         predis_result = await predis_create_content(
-            text=predis_text,
+            text=branded_text,
             media_type="carousel",
             model_version="4",
             n_posts=1,
