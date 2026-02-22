@@ -186,7 +186,6 @@ TP26_BRAND_DETAILS = json.dumps({
     "color_1": "1B3A5C",
     "color_2": "D4A843",
     "color_3": "FFFFFF",
-    "brand_name": "tuspapeles2026",
     "brand_handle": "@tuspapeles2026",
     "brand_website": "tuspapeles2026.es",
 })
