@@ -11,6 +11,13 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.1.0 (2026-02-23)
+  - ADD: /daily command — generates full day's content from weekly calendar
+  - ADD: DAILY_CONTENT_PLAN — weekly calendar mapping day→angle→funnel→themes
+  - ADD: Scheduled auto-generation at 7:30am Madrid (Predis only)
+  - ADD: /daily force — override daily limit
+  - UPDATE: /help with automation section
+
 v4.1.0-alpha (2026-02-23)
   - ADD: Smart topic engine with 60+ themes, file-based persistence
   - ADD: Least-recently-used topic selection (no repeats across restarts)
@@ -967,6 +974,91 @@ ANGLE_THEME_MAP = {
     "humor": ["humor"],
     "curiosity": ["educational"],
 }
+
+
+# ==============================================================================
+# DAILY CONTENT PLAN — weekly calendar (day_of_week → list of content slots)
+# Each slot: (media_type, angle, funnel_stage, theme_filter_list)
+# ==============================================================================
+
+DAILY_CONTENT_PLAN = {
+    # Monday (10 slots)
+    0: [
+        ("carousel", "fear", "tofu", ["fears", "educational"]),
+        ("carousel", "proof", "mofu", ["proof"]),
+        ("carousel", "urgency", "bofu", ["urgency"]),
+        ("image", "urgency", "bofu", ["urgency"]),
+        ("video", "curiosity", "tofu", ["educational"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("blog", None, "tofu", ["educational", "fears"]),
+        ("whatsapp", "urgency", "bofu", ["urgency"]),
+        ("fbtext", "curiosity", "tofu", ["educational"]),
+    ],
+    # Tuesday (9 slots)
+    1: [
+        ("carousel", "hope", "tofu", ["hope"]),
+        ("carousel", "curiosity", "tofu", ["educational"]),
+        ("carousel", "proof", "mofu", ["proof"]),
+        ("image", "proof", "mofu", ["proof"]),
+        ("video", "fear", "tofu", ["fears", "educational"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("whatsapp", None, None, None),
+        ("fbtext", "proof", "mofu", ["proof"]),
+    ],
+    # Wednesday (10 slots)
+    2: [
+        ("carousel", "urgency", "bofu", ["urgency"]),
+        ("carousel", "fear", "tofu", ["fears", "educational"]),
+        ("carousel", "hope", "tofu", ["hope"]),
+        ("image", "curiosity", "tofu", ["educational"]),
+        ("video", "urgency", "bofu", ["urgency"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("blog", None, "tofu", ["educational", "fears"]),
+        ("whatsapp", "hope", "tofu", ["hope"]),
+        ("fbtext", "curiosity", "tofu", ["educational"]),
+    ],
+    # Thursday (7 slots)
+    3: [
+        ("carousel", "proof", "mofu", ["proof"]),
+        ("carousel", "urgency", "bofu", ["urgency"]),
+        ("image", "fear", "tofu", ["fears", "educational"]),
+        ("video", "proof", "mofu", ["proof"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("fbtext", "fear", "tofu", ["fears", "educational"]),
+    ],
+    # Friday (9 slots)
+    4: [
+        ("carousel", "curiosity", "tofu", ["educational"]),
+        ("carousel", "hope", "tofu", ["hope"]),
+        ("carousel", "fear", "tofu", ["fears", "educational"]),
+        ("image", "hope", "tofu", ["hope"]),
+        ("video", "humor", "tofu", ["humor"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("whatsapp", "urgency", "bofu", ["urgency"]),
+        ("fbtext", "proof", "mofu", ["proof"]),
+    ],
+    # Saturday (5 slots)
+    5: [
+        ("carousel", "proof", "mofu", ["proof"]),
+        ("image", "hope", "tofu", ["hope"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("reel", "hope", "tofu", ["hope"]),
+    ],
+    # Sunday (4 slots)
+    6: [
+        ("image", "urgency", "bofu", ["urgency"]),
+        ("meme", "humor", "tofu", ["humor"]),
+        ("quote", "hope", "tofu", ["hope"]),
+        ("reel", "curiosity", "tofu", ["educational"]),
+    ],
+}
+
 
 # Blog topic pools by category (for /blog suggestions)
 BLOG_TOPICS = {
@@ -2656,7 +2748,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command."""
     help_text = (
-        "🤖 *Content Bot v4.0 — Commands*\n\n"
+        "🤖 *Content Bot v4\\.1 — Commands*\n\n"
         "📐 *Ángulos:* fear|hope|urgency|proof|humor|curiosity|ad\n"
         "Usa /ideas para ver ejemplos de cada ángulo\\.\n\n"
         "*Predis auto\\-post \\(Claude → Predis\\.ai\\):*\n"
@@ -2673,6 +2765,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /blog \\[topic|noticias|guias|mitos\\] — Artículo SEO\n"
         "  /whatsapp \\[angle\\] \\[topic\\] — Mensaje WhatsApp\n"
         "  /fbtext \\[angle\\] \\[topic\\] — Post Facebook\n\n"
+        "*Automatización:*\n"
+        "  /daily — Generar contenido del día \\(videos \\+ textos\\)\n"
+        "  /daily force — Regenerar todo aunque ya se ejecutó\n"
+        "  ⏰ Predis se auto\\-genera a las 7:30am España\n\n"
         "*Planificación:*\n"
         "  /weekly — Pack semanal \\(25 piezas\\)\n"
         "  /ideas — Ejemplos de comandos por tipo\n"
@@ -3499,6 +3595,436 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ),
         parse_mode=ParseMode.HTML,
     )
+
+
+# ==============================================================================
+# COMMAND HANDLERS — /daily AUTO-GENERATION
+# ==============================================================================
+
+# Prompt template map for Predis pipeline
+_DAILY_PROMPT_MAP = {
+    "carousel": CAROUSEL_PROMPT_V4,
+    "image": IMAGE_PROMPT_V4,
+    "reel": REEL_PROMPT_V4,
+    "meme": MEME_PROMPT_V4,
+    "quote": QUOTE_PROMPT_V4,
+}
+
+# Predis media type mapping
+_DAILY_PREDIS_MEDIA = {
+    "carousel": "carousel",
+    "image": "single_image",
+    "reel": "video",
+    "meme": "single_image",
+    "quote": "single_image",
+}
+
+
+@team_only
+async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate all content for today based on weekly calendar."""
+    global topic_history
+
+    today = datetime.now()
+    day_of_week = today.weekday()
+    day_names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    day_name = day_names[day_of_week]
+
+    # Check if already run today
+    today_str = today.strftime("%Y-%m-%d")
+    last_daily = topic_history.get("last_daily")
+    force = context.args and len(context.args) > 0 and context.args[0] == "force"
+
+    if last_daily == today_str and not force:
+        await update.message.reply_text(
+            f"⚠️ Ya se generó contenido hoy ({day_name}).\n"
+            "Usa: /daily force para regenerar"
+        )
+        return
+
+    plan = DAILY_CONTENT_PLAN.get(day_of_week, [])
+    active_plan = [(mt, ang, fun, tf) for mt, ang, fun, tf in plan if tf is not None]
+    total = len(active_plan)
+
+    await update.message.reply_text(
+        f"📅 {day_name} — Generando {total} piezas...\n"
+        "Te envío cada una cuando esté lista."
+    )
+
+    predis_types = {"carousel", "image", "reel", "meme", "quote"}
+    auto_ran = topic_history.get("last_daily_auto") == today_str
+
+    if auto_ran and not force:
+        # Auto already created Predis content — only generate Claude items
+        predis_items = []
+        claude_items = [(mt, ang, fun, tf) for mt, ang, fun, tf in active_plan if mt not in predis_types]
+        await update.message.reply_text(
+            "ℹ️ Predis ya se generó automáticamente. Generando solo videos y textos..."
+        )
+    else:
+        predis_items = [(mt, ang, fun, tf) for mt, ang, fun, tf in active_plan if mt in predis_types]
+        claude_items = [(mt, ang, fun, tf) for mt, ang, fun, tf in active_plan if mt not in predis_types]
+
+    chat_id = update.effective_chat.id
+    generated = 0
+    errors = 0
+
+    # ── Claude items first (video scripts, blog, whatsapp, fbtext) ────
+    for media_type, angle, funnel, theme_filter in claude_items:
+        try:
+            topic_data = smart_pick_topic(
+                content_type=media_type, angle=angle, theme_filter=theme_filter,
+            )
+            topic = topic_data["text"]
+
+            if media_type == "video":
+                data = await generate_content("tiktok", topic)
+                if data:
+                    if isinstance(data, dict):
+                        msg = format_tiktok_for_telegram(data)
+                    else:
+                        msg = f"🎬 VIDEO ({angle or 'auto'}) — {topic}\n\n{data}"
+                    await send_long_message(chat_id, msg, context)
+                    log_content("video", angle, topic, "invideo")
+                    generated += 1
+
+            elif media_type == "blog":
+                data = await generate_content("blog", topic)
+                if data:
+                    if isinstance(data, dict):
+                        msg = format_blog_for_telegram(data)
+                        # Store for publish buttons
+                        article_id = hashlib.md5(
+                            json.dumps(data, default=str).encode()
+                        ).hexdigest()[:8]
+                        pending_articles[article_id] = data
+                        buttons = [[
+                            InlineKeyboardButton(
+                                "🌐 Publicar en web",
+                                callback_data=f"pub_tp_{article_id}",
+                            ),
+                            InlineKeyboardButton(
+                                "📢 Canal",
+                                callback_data=f"pub_ch_{article_id}",
+                            ),
+                        ]]
+                        await send_long_message(
+                            chat_id, msg, context,
+                            reply_markup=InlineKeyboardMarkup(buttons),
+                        )
+                    else:
+                        msg = f"📝 BLOG — {topic}\n\n{str(data)[:1500]}"
+                        await send_long_message(chat_id, msg, context)
+                    log_content("blog", None, topic, "claude")
+                    generated += 1
+
+            elif media_type == "whatsapp":
+                data = await generate_content("whatsapp", topic)
+                if data:
+                    if isinstance(data, dict):
+                        msg = format_whatsapp_for_telegram(data)
+                    else:
+                        msg = f"📱 WA ({angle or 'auto'}) — {topic}\n\n{data}"
+                    await send_long_message(chat_id, msg, context)
+                    log_content("whatsapp", angle, topic, "claude")
+                    generated += 1
+
+            elif media_type == "fbtext":
+                data = await generate_content("fbpost", topic)
+                if data:
+                    if isinstance(data, dict):
+                        msg = format_fbpost_for_telegram(data)
+                    else:
+                        msg = f"📘 FB ({angle or 'auto'}) — {topic}\n\n{data}"
+                    await send_long_message(chat_id, msg, context)
+                    log_content("fbtext", angle, topic, "claude")
+                    generated += 1
+
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"Daily claude error ({media_type}): {e}")
+            errors += 1
+
+    # ── Predis items in batches of 3 ──────────────────────────────────
+    for i in range(0, len(predis_items), 3):
+        batch = predis_items[i:i + 3]
+        for media_type, angle, funnel, theme_filter in batch:
+            try:
+                topic_data = smart_pick_topic(
+                    content_type=media_type, angle=angle, theme_filter=theme_filter,
+                )
+                topic = topic_data["text"]
+                actual_angle = "humor" if media_type == "meme" else ("hope" if media_type == "quote" else angle)
+
+                prompt_template = _DAILY_PROMPT_MAP.get(media_type, CAROUSEL_PROMPT_V4)
+
+                seo_str = get_seo_keywords()
+                if topic_data.get("seo"):
+                    seo_str += f" Incluye: {topic_data['seo']}\n"
+
+                # Format prompt — meme/quote templates don't have angle_instruction
+                if media_type in ("meme", "quote"):
+                    prompt = prompt_template.format(seo_keywords=seo_str, topic=topic)
+                else:
+                    prompt = prompt_template.format(
+                        angle_instruction=get_angle_instruction(actual_angle),
+                        seo_keywords=seo_str,
+                        topic=topic,
+                    )
+
+                text = await generate_content(media_type, topic, override_prompt=prompt)
+                if not text:
+                    errors += 1
+                    continue
+                if isinstance(text, dict):
+                    text = text.get("_raw", str(text))
+                if len(text) > 950:
+                    text = text[:920] + "... tuspapeles2026.es #regularizacion2026"
+
+                if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"📝 {media_type.upper()} (sin Predis):\n{text[:800]}",
+                    )
+                    log_content(media_type, actual_angle, topic, "claude_only")
+                    generated += 1
+                    continue
+
+                # Predis params
+                p_media = _DAILY_PREDIS_MEDIA[media_type]
+                p_kwargs = {
+                    "text": text,
+                    "media_type": p_media,
+                    "model_version": "4" if media_type in ("carousel", "image") else "2",
+                }
+                if media_type == "meme":
+                    p_kwargs["post_type"] = "meme"
+                elif media_type == "quote":
+                    p_kwargs["post_type"] = "quotes"
+                if media_type == "reel":
+                    p_kwargs["video_duration"] = "short"
+
+                create_result = await predis_create_content(**p_kwargs)
+                if not create_result.get("ok"):
+                    error_msg = create_result.get("error", "Unknown")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⚠️ Predis error ({media_type}): {error_msg}\n📝 Texto:\n{text[:300]}",
+                    )
+                    errors += 1
+                    continue
+
+                post_id = create_result["post_ids"][0]
+
+                post_data = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
+
+                if not post_data.get("ok"):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⏰ Timeout: {media_type}. ID: {post_id}",
+                    )
+                    log_content(media_type, actual_angle, topic, "predis", predis_post_id=post_id)
+                    generated += 1
+                    continue
+
+                approval_data = {
+                    "generated_text": text,
+                    "generated_media": post_data.get("urls", []),
+                }
+                await send_predis_approval(
+                    update, context, post_id, approval_data,
+                    media_type.upper(), actual_angle, topic,
+                )
+                log_content(media_type, actual_angle, topic, "predis", predis_post_id=post_id)
+                generated += 1
+
+            except Exception as e:
+                logger.error(f"Daily predis error ({media_type}): {e}")
+                errors += 1
+
+        if i + 3 < len(predis_items):
+            await asyncio.sleep(10)
+
+    topic_history["last_daily"] = today_str
+    save_topic_history(topic_history)
+
+    await update.message.reply_text(
+        f"✅ {day_name} completado\n\n"
+        f"✅ {generated} generados | ❌ {errors} errores\n\n"
+        f"Revisa y aprueba Predis ☝️\n"
+        f"Copia y sube videos InVideo manualmente."
+    )
+
+
+async def scheduled_daily_generation(bot=None):
+    """Auto-generate Predis content at 7:30am Madrid. Videos/text need manual /daily."""
+    global topic_history
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if topic_history.get("last_daily") == today_str:
+        logger.info(f"Daily already generated for {today_str}")
+        return
+
+    if not TEAM_CHAT_IDS or not bot:
+        return
+
+    day_of_week = datetime.now().weekday()
+    plan = DAILY_CONTENT_PLAN.get(day_of_week, [])
+    predis_types = {"carousel", "image", "reel", "meme", "quote"}
+    predis_items = [
+        (mt, ang, fun, tf)
+        for mt, ang, fun, tf in plan
+        if tf is not None and mt in predis_types
+    ]
+
+    if not predis_items:
+        return
+
+    day_names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    day_name = day_names[day_of_week]
+
+    # Notify team
+    for tid in TEAM_CHAT_IDS:
+        try:
+            await bot.send_message(
+                chat_id=tid,
+                text=f"🤖 Auto-generando {len(predis_items)} piezas Predis ({day_name})...",
+            )
+        except Exception:
+            pass
+
+    generated = 0
+
+    for i in range(0, len(predis_items), 3):
+        batch = predis_items[i:i + 3]
+        for media_type, angle, funnel, theme_filter in batch:
+            try:
+                topic_data = smart_pick_topic(
+                    content_type=media_type, angle=angle, theme_filter=theme_filter,
+                )
+                topic = topic_data["text"]
+                actual_angle = "humor" if media_type == "meme" else ("hope" if media_type == "quote" else angle)
+
+                prompt_template = _DAILY_PROMPT_MAP.get(media_type, CAROUSEL_PROMPT_V4)
+
+                seo_str = get_seo_keywords()
+                if topic_data.get("seo"):
+                    seo_str += f" Incluye: {topic_data['seo']}\n"
+
+                if media_type in ("meme", "quote"):
+                    prompt = prompt_template.format(seo_keywords=seo_str, topic=topic)
+                else:
+                    prompt = prompt_template.format(
+                        angle_instruction=get_angle_instruction(actual_angle),
+                        seo_keywords=seo_str,
+                        topic=topic,
+                    )
+
+                text = await generate_content(media_type, topic, override_prompt=prompt)
+                if not text or (isinstance(text, str) and len(text) < 20):
+                    continue
+                if isinstance(text, dict):
+                    text = text.get("_raw", str(text))
+                if len(text) > 950:
+                    text = text[:920] + "... tuspapeles2026.es #regularizacion2026"
+
+                if not PREDIS_API_KEY or not PREDIS_BRAND_ID:
+                    continue
+
+                p_media = _DAILY_PREDIS_MEDIA[media_type]
+                p_kwargs = {
+                    "text": text,
+                    "media_type": p_media,
+                    "model_version": "4" if media_type in ("carousel", "image") else "2",
+                }
+                if media_type == "meme":
+                    p_kwargs["post_type"] = "meme"
+                elif media_type == "quote":
+                    p_kwargs["post_type"] = "quotes"
+                if media_type == "reel":
+                    p_kwargs["video_duration"] = "short"
+
+                create_result = await predis_create_content(**p_kwargs)
+                if not create_result.get("ok"):
+                    continue
+
+                post_id = create_result["post_ids"][0]
+
+                post_data = await predis_poll_until_complete(post_id, max_wait=180, interval=5)
+
+                # Send approval to all team members
+                for tid in TEAM_CHAT_IDS:
+                    try:
+                        caption = ""
+                        if post_data.get("ok"):
+                            caption = (
+                                post_data.get("generated_text")
+                                or post_data.get("caption")
+                                or post_data.get("text", "")
+                            )[:400]
+
+                        buttons = [
+                            [
+                                InlineKeyboardButton(
+                                    "✅ Aprobar", callback_data=f"pa_{post_id[:20]}",
+                                ),
+                                InlineKeyboardButton(
+                                    "❌ Rechazar", callback_data=f"pr_{post_id[:20]}",
+                                ),
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    "✏️ Editar",
+                                    url="https://predis.ai/app/content_library",
+                                ),
+                            ],
+                        ]
+
+                        await bot.send_message(
+                            chat_id=tid,
+                            text=(
+                                f"🤖 AUTO | {media_type.upper()} | {actual_angle}\n"
+                                f"📝 {topic[:80]}\n\n{caption[:300]}"
+                            ),
+                            reply_markup=InlineKeyboardMarkup(buttons),
+                        )
+
+                        if post_data.get("ok"):
+                            imgs = post_data.get("urls", [])
+                            if imgs:
+                                url = imgs[0] if isinstance(imgs[0], str) else imgs[0].get("url", "")
+                                if url:
+                                    try:
+                                        await bot.send_photo(chat_id=tid, photo=url)
+                                    except Exception:
+                                        pass
+                    except Exception as e:
+                        logger.error(f"Scheduled approval send error: {e}")
+
+                log_content(media_type, actual_angle, topic, "predis", predis_post_id=post_id)
+                generated += 1
+            except Exception as e:
+                logger.error(f"Scheduled gen error ({media_type}): {e}")
+
+        if i + 3 < len(predis_items):
+            await asyncio.sleep(10)
+
+    # Mark auto-generation as done
+    topic_history["last_daily_auto"] = today_str
+    save_topic_history(topic_history)
+
+    for tid in TEAM_CHAT_IDS:
+        try:
+            await bot.send_message(
+                chat_id=tid,
+                text=(
+                    f"✅ Auto-generación: {generated} piezas Predis\n"
+                    f"Revisa y aprueba ☝️\n\n"
+                    f"Para videos y textos: /daily"
+                ),
+            )
+        except Exception:
+            pass
 
 
 # ==============================================================================
@@ -5224,6 +5750,9 @@ def main():
     # Weekly mega-batch
     app.add_handler(CommandHandler("weekly", cmd_weekly))
 
+    # Daily auto-generation
+    app.add_handler(CommandHandler("daily", cmd_daily))
+
     # Planning & discovery
     app.add_handler(CommandHandler("ideas", cmd_ideas))
 
@@ -5251,14 +5780,22 @@ def main():
             hour="6,12,18,0",
             kwargs={"bot": application.bot},
         )
+        scheduler.add_job(
+            scheduled_daily_generation,
+            "cron",
+            hour=7,
+            minute=30,
+            kwargs={"bot": application.bot},
+        )
         scheduler.start()
         logger.info("News auto-scan scheduler started (every 6h Madrid time)")
+        logger.info("Daily auto-generation scheduled (7:30am Madrid)")
         await ensure_logos()
         logger.info("Logo download check complete")
 
     app.post_init = post_init
 
-    logger.info("Content Bot v4.0 starting")
+    logger.info("Content Bot v4.1 starting")
     logger.info(f"Team IDs: {TEAM_CHAT_IDS}")
     logger.info(f"Phase: {get_current_phase()}")
     app.run_polling()
