@@ -11,6 +11,12 @@ Supports one-tap blog publishing to pombohorowitz.es and tuspapeles2026.es.
 
 CHANGELOG:
 ----------
+v4.1.0-alpha (2026-02-23)
+  - ADD: Smart topic engine with 60+ themes, file-based persistence
+  - ADD: Least-recently-used topic selection (no repeats across restarts)
+  - ADD: SEO keyword per topic for better search optimization
+  - REMOVE: Old in-memory RECENT_TOPICS system
+
 v4.0.0 (2026-02-22)
   - REPLACE: /help with full V4 command listing (angles, Predis, InVideo, text, planning, tools)
   - ADD: /ideas — example commands per media type with different angles
@@ -322,6 +328,32 @@ def log_content(media_type, angle, topic, tool, predis_post_id=None, approved=No
     content_log.append(entry)
     save_content_log()
     return entry
+
+
+# ==============================================================================
+# PERSISTENT TOPIC HISTORY
+# ==============================================================================
+
+TOPIC_HISTORY_FILE = "topic_history.json"
+
+
+def load_topic_history() -> dict:
+    try:
+        with open(TOPIC_HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"used": {}, "last_daily": None}
+
+
+def save_topic_history(history: dict):
+    try:
+        with open(TOPIC_HISTORY_FILE, "w") as f:
+            json.dump(history, f, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to save topic history: {e}")
+
+
+topic_history = {}
 
 
 # ==============================================================================
@@ -853,16 +885,88 @@ TOPIC_POOLS = {
     ],
 }
 
-# Track recent topics to avoid repetition (in-memory, resets on restart)
-RECENT_TOPICS = {
-    "tiktok": [],
-    "carousel": [],
-    "story": [],
-    "whatsapp": [],
-    "fbpost": [],
-}
+# ==============================================================================
+# CONTENT_THEMES — unified theme-based topic list (60+ entries)
+# ==============================================================================
 
-MAX_RECENT = 10  # Remember last 10 topics per type
+CONTENT_THEMES = [
+    # ── EDUCATIONAL (~15) ─────────────────────────────────────────────
+    {"id": "edu_5months", "theme": "educational", "text": "Solo necesitas 5 meses de residencia, no años", "seo": "5 meses residencia regularización"},
+    {"id": "edu_no_contract", "theme": "educational", "text": "No necesitas contrato de trabajo para aplicar", "seo": "regularización sin contrato trabajo"},
+    {"id": "edu_vulnerability", "theme": "educational", "text": "La cláusula de vulnerabilidad explicada paso a paso", "seo": "cláusula vulnerabilidad regularización"},
+    {"id": "edu_timeline", "theme": "educational", "text": "Timeline completo del proceso: del BOE a tus papeles", "seo": "plazo regularización extraordinaria 2026"},
+    {"id": "edu_boe", "theme": "educational", "text": "Qué pasa cuando se publica el BOE y qué significa", "seo": "BOE regularización 2026"},
+    {"id": "edu_8docs", "theme": "educational", "text": "Los 8 documentos que necesitas preparar ya", "seo": "documentos regularización extraordinaria"},
+    {"id": "edu_empadronamiento", "theme": "educational", "text": "Empadronamiento: tu documento más importante y cómo conseguirlo", "seo": "empadronamiento regularización España"},
+    {"id": "edu_antecedentes", "theme": "educational", "text": "Certificado de antecedentes penales: guía completa", "seo": "antecedentes penales regularización"},
+    {"id": "edu_digital", "theme": "educational", "text": "El proceso es 100% digital, sin colas ni citas presenciales", "seo": "proceso digital regularización 2026"},
+    {"id": "edu_2005vs2026", "theme": "educational", "text": "Regularización 2005 vs 2026: las 7 diferencias clave", "seo": "regularización 2005 2026 diferencias"},
+    {"id": "edu_arraigo", "theme": "educational", "text": "Arraigo social vs arraigo laboral: cuál te conviene", "seo": "arraigo social laboral España"},
+    {"id": "edu_rights", "theme": "educational", "text": "Derechos que obtienes con la regularización: sanidad, trabajo, vivienda", "seo": "derechos regularización España"},
+    {"id": "edu_medical", "theme": "educational", "text": "Certificado médico para la regularización: qué piden y cuánto cuesta", "seo": "certificado médico regularización"},
+    {"id": "edu_passport", "theme": "educational", "text": "Pasaporte vigente: cómo renovarlo a tiempo para el plazo", "seo": "renovar pasaporte regularización"},
+    {"id": "edu_costs", "theme": "educational", "text": "Costos reales del proceso completo de regularización", "seo": "precio regularización extraordinaria 2026"},
+
+    # ── FEARS (~10) ───────────────────────────────────────────────────
+    {"id": "fear_deportation", "theme": "fears", "text": "Mito: te pueden deportar por intentar regularizarte", "seo": "deportación regularización mito"},
+    {"id": "fear_expensive", "theme": "fears", "text": "Mito: la regularización cuesta miles de euros", "seo": "coste regularización España"},
+    {"id": "fear_spanish", "theme": "fears", "text": "Mito: necesitas hablar español perfecto para aplicar", "seo": "idioma regularización requisito"},
+    {"id": "fear_denied", "theme": "fears", "text": "¿Qué pasa si te deniegan? Opciones y recursos disponibles", "seo": "denegación regularización recurso"},
+    {"id": "fear_latin_only", "theme": "fears", "text": "Mito: la regularización es solo para latinoamericanos", "seo": "regularización todas nacionalidades"},
+    {"id": "fear_data_safety", "theme": "fears", "text": "¿Es seguro dar mis datos? Protección de información en el proceso", "seo": "seguridad datos regularización"},
+    {"id": "fear_money_risk", "theme": "fears", "text": "¿Puedo perder mi dinero si no me aprueban?", "seo": "riesgo dinero regularización"},
+    {"id": "fear_wait_vs_act", "theme": "fears", "text": "Esperar vs prepararte ahora: qué pierdes si no actúas", "seo": "prepararse regularización 2026"},
+    {"id": "fear_no_job", "theme": "fears", "text": "Mito: sin trabajo no puedes regularizarte", "seo": "regularización sin empleo"},
+    {"id": "fear_criminal", "theme": "fears", "text": "Mito: cualquier antecedente penal te descalifica", "seo": "antecedentes penales requisito regularización"},
+
+    # ── URGENCY (~7) ──────────────────────────────────────────────────
+    {"id": "urg_april", "theme": "urgency", "text": "Abril se acerca: ¿tienes todo listo para la apertura?", "seo": "plazo abril regularización 2026"},
+    {"id": "urg_docs_weeks", "theme": "urgency", "text": "Los documentos tardan semanas en llegar, empieza ya", "seo": "tiempo documentos regularización"},
+    {"id": "urg_passport", "theme": "urgency", "text": "Renovar tu pasaporte puede tardar 2-3 meses", "seo": "renovar pasaporte plazo regularización"},
+    {"id": "urg_waiting_error", "theme": "urgency", "text": "Esperar al último momento es el error más común", "seo": "prepararse antes regularización"},
+    {"id": "urg_limited", "theme": "urgency", "text": "Plazas limitadas para asesoría — no esperes más", "seo": "plazas limitadas regularización"},
+    {"id": "urg_june_deadline", "theme": "urgency", "text": "Junio 2026: la ventana se cierra, no hay prórroga", "seo": "fecha límite junio regularización 2026"},
+    {"id": "urg_3_things_today", "theme": "urgency", "text": "3 cosas que puedes hacer HOY para prepararte", "seo": "preparar regularización hoy"},
+
+    # ── PROOF (~7) ────────────────────────────────────────────────────
+    {"id": "proof_thousands", "theme": "proof", "text": "Miles de personas ya se están preparando con nosotros", "seo": "comunidad regularización 2026"},
+    {"id": "proof_2005_rate", "theme": "proof", "text": "En 2005 se aprobó el 83% de solicitudes presentadas", "seo": "tasa aprobación regularización 2005"},
+    {"id": "proof_price_compare", "theme": "proof", "text": "Desde €199 vs €350-450 de la competencia", "seo": "precio regularización comparación"},
+    {"id": "proof_real_lawyers", "theme": "proof", "text": "Abogados reales revisan cada expediente personalmente", "seo": "abogados regularización España"},
+    {"id": "proof_ai_verify", "theme": "proof", "text": "IA verifica tus documentos 24/7 antes de enviar", "seo": "verificación documentos IA regularización"},
+    {"id": "proof_community", "theme": "proof", "text": "Nuestra comunidad crece cada día — no estás solo", "seo": "comunidad inmigrantes regularización"},
+    {"id": "proof_referral", "theme": "proof", "text": "Sistema de referidos: recomienda y sube de nivel", "seo": "referidos tuspapeles2026"},
+
+    # ── HOPE (~6) ─────────────────────────────────────────────────────
+    {"id": "hope_imagine", "theme": "hope", "text": "Imagina tener papeles: qué cambia en tu vida desde el día uno", "seo": "vida con papeles España"},
+    {"id": "hope_family", "theme": "hope", "text": "Reunificación familiar: el primer paso es tu regularización", "seo": "reunificación familiar regularización"},
+    {"id": "hope_rights", "theme": "hope", "text": "Sanidad, trabajo, vivienda: los derechos que vas a recuperar", "seo": "derechos regularización inmigrantes"},
+    {"id": "hope_2005_stories", "theme": "hope", "text": "Historias reales de la regularización de 2005: sí se puede", "seo": "historias éxito regularización 2005"},
+    {"id": "hope_first_step", "theme": "hope", "text": "El primer paso es el más difícil — pero ya lo estás dando", "seo": "primer paso regularización"},
+    {"id": "hope_children", "theme": "hope", "text": "Tus hijos merecen estabilidad — esto es por ellos también", "seo": "hijos regularización estabilidad"},
+
+    # ── HUMOR (~8) ────────────────────────────────────────────────────
+    {"id": "humor_extranjeria", "theme": "humor", "text": "Las colas de extranjería: una experiencia que nos une a todos", "seo": "extranjería colas España"},
+    {"id": "humor_nie", "theme": "humor", "text": "Cuando te piden el NIE para absolutamente TODO en España", "seo": "NIE España trámites"},
+    {"id": "humor_empadronamiento", "theme": "humor", "text": "Conseguir cita para empadronarte: misión imposible nivel experto", "seo": "cita empadronamiento España"},
+    {"id": "humor_job_situation", "theme": "humor", "text": "Cuando preguntan tu situación laboral y no sabes qué decir", "seo": "trabajo sin papeles España"},
+    {"id": "humor_papers_question", "theme": "humor", "text": "Cuando alguien pregunta '¿ya tienes papeles?' por millonésima vez", "seo": "papeles España inmigrantes"},
+    {"id": "humor_bureaucracy", "theme": "humor", "text": "La burocracia española: el jefe final que todos enfrentamos", "seo": "burocracia extranjería España"},
+    {"id": "humor_working", "theme": "humor", "text": "Cuando trabajas más que nadie pero sin contrato oficial", "seo": "trabajar sin papeles realidad"},
+    {"id": "humor_folder", "theme": "humor", "text": "Esa carpeta de documentos que pesa más que tu maleta al llegar", "seo": "documentos inmigrante España"},
+]
+
+THEMES_BY_ID = {t["id"]: t for t in CONTENT_THEMES}
+
+# Angle → theme filter mapping for smart topic selection
+ANGLE_THEME_MAP = {
+    "fear": ["fears", "educational"],
+    "hope": ["hope"],
+    "urgency": ["urgency"],
+    "proof": ["proof"],
+    "humor": ["humor"],
+    "curiosity": ["educational"],
+}
 
 # Blog topic pools by category (for /blog suggestions)
 BLOG_TOPICS = {
@@ -947,33 +1051,62 @@ def suggest_blog_topics(category_filter: str = None, count: int = 3) -> list[dic
     return suggestions
 
 
-def pick_topic(content_type, user_topic=None):
-    """Pick a topic, avoiding recent ones. If user provides topic, use it."""
+def smart_pick_topic(content_type: str = None, angle: str = None,
+                     theme_filter: list = None, user_topic: str = None) -> dict:
+    """Return {"text": str, "seo": str, "id": str} using least-recently-used algorithm."""
+    global topic_history
+
     if user_topic:
-        # User specified topic — use it but still track it
-        RECENT_TOPICS.setdefault(content_type, []).append(user_topic)
-        if len(RECENT_TOPICS[content_type]) > MAX_RECENT:
-            RECENT_TOPICS[content_type].pop(0)
-        return user_topic
+        return {"text": user_topic, "seo": "", "id": f"custom_{hash(user_topic) % 10000}"}
 
+    # Use angle→theme mapping if no explicit filter
+    if theme_filter is None and angle and angle in ANGLE_THEME_MAP:
+        theme_filter = ANGLE_THEME_MAP[angle]
+
+    candidates = (
+        [t for t in CONTENT_THEMES if t["theme"] in theme_filter]
+        if theme_filter
+        else list(CONTENT_THEMES)
+    )
+    if not candidates:
+        candidates = list(CONTENT_THEMES)
+
+    used = topic_history.get("used", {})
+    now = datetime.now()
+    scored = []
+    for t in candidates:
+        times_used = used.get(t["id"], {}).get("count", 0)
+        last_str = used.get(t["id"], {}).get("last")
+        days_ago = 999
+        if last_str:
+            try:
+                days_ago = (now - datetime.fromisoformat(last_str)).days
+            except Exception:
+                pass
+        score = (times_used * 50) - (days_ago * 10)
+        scored.append((score, t))
+
+    scored.sort(key=lambda x: x[0])
+    chosen = random.choice([s[1] for s in scored[:5]])
+
+    if chosen["id"] not in used:
+        used[chosen["id"]] = {"count": 0, "last": None}
+    used[chosen["id"]]["count"] += 1
+    used[chosen["id"]]["last"] = now.isoformat()
+    topic_history["used"] = used
+    save_topic_history(topic_history)
+
+    return chosen
+
+
+def pick_topic(content_type, user_topic=None):
+    """Pick a topic via smart engine, with TOPIC_POOLS fallback."""
+    result = smart_pick_topic(content_type=content_type, user_topic=user_topic)
+    if result and result["text"]:
+        return result["text"]
+    # Fallback to old pool
     pool = TOPIC_POOLS.get(content_type, [])
-    if not pool:
-        return ""
-    recent = RECENT_TOPICS.get(content_type, [])
-
-    # Filter out recently used topics
-    available = [t for t in pool if t not in recent]
-    if not available:
-        # All used — reset and start over
-        RECENT_TOPICS[content_type] = []
-        available = pool
-
-    topic = random.choice(available)
-    RECENT_TOPICS.setdefault(content_type, []).append(topic)
-    if len(RECENT_TOPICS[content_type]) > MAX_RECENT:
-        RECENT_TOPICS[content_type].pop(0)
-
-    return topic
+    return random.choice(pool) if pool else ""
 
 
 def pick_multiple_topics(content_type, count):
@@ -2681,7 +2814,8 @@ async def cmd_blog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _generate_premium_video(update, context, user_topic):
     """Generate a premium emotional ad video script (ad angle)."""
-    topic = pick_topic("tiktok", user_topic if user_topic else None)
+    topic_data = smart_pick_topic(content_type="tiktok", angle="ad", user_topic=user_topic if user_topic else None)
+    topic = topic_data["text"]
 
     wait_msg = await update.message.reply_text(
         "\U0001f3ac\u2728 Generando ANUNCIO PREMIUM..."
@@ -2817,7 +2951,8 @@ async def cmd_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _generate_premium_video(update, context, user_topic)
         return
 
-    topic = pick_topic("tiktok", user_topic if user_topic else None)
+    topic_data = smart_pick_topic(content_type="tiktok", angle=angle, user_topic=user_topic if user_topic else None)
+    topic = topic_data["text"]
     angle_label = f" [\U0001f3af {angle}]" if angle else ""
     wait_msg = await update.message.reply_text(f"\u23f3 Generating video script{angle_label}...")
     try:
@@ -2894,7 +3029,8 @@ async def cmd_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_topic = f"type: {msg_type}"
     elif remaining:
         user_topic = remaining
-    topic = pick_topic("whatsapp", user_topic)
+    topic_data = smart_pick_topic(content_type="whatsapp", angle=angle, user_topic=user_topic)
+    topic = topic_data["text"]
 
     angle_label = f" [\U0001f3af {angle}]" if angle else ""
     wait_msg = await update.message.reply_text(f"\u23f3 Generating WhatsApp message{angle_label}...")
@@ -2917,7 +3053,8 @@ async def cmd_fbtext(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /fbtext [angle] [topic] — generate Facebook post with angle support."""
     args = context.args if context.args else []
     angle, user_topic = parse_angle_and_topic(args)
-    topic = pick_topic("fbpost", user_topic if user_topic else None)
+    topic_data = smart_pick_topic(content_type="fbpost", angle=angle, user_topic=user_topic if user_topic else None)
+    topic = topic_data["text"]
     angle_label = f" [\U0001f3af {angle}]" if angle else ""
     wait_msg = await update.message.reply_text(f"\u23f3 Generating Facebook text{angle_label}...")
     try:
@@ -3111,7 +3248,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_angles = ["curiosity", "fear", "urgency", "hope"]
     for angle in video_angles:
         piece += 1
-        topic = pick_topic("tiktok")
+        topic_data = smart_pick_topic(content_type="tiktok", angle=angle)
+        topic = topic_data["text"]
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"⏳ Generando pieza {piece}/25 — video [{angle}]...",
@@ -3133,8 +3271,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"⏳ Generando pieza {piece}/25 — video premium [ad]...",
     )
     try:
-        ad_topic = pick_topic("tiktok")
-        await _generate_premium_video(update, context, ad_topic)
+        ad_data = smart_pick_topic(content_type="tiktok", angle="ad")
+        await _generate_premium_video(update, context, ad_data["text"])
         success += 1
     except Exception as e:
         logger.error(f"weekly premium ad: {e}")
@@ -3181,7 +3319,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wa_angles = ["urgency", "curiosity"]
     for angle in wa_angles:
         piece += 1
-        topic = pick_topic("whatsapp")
+        topic_data = smart_pick_topic(content_type="whatsapp", angle=angle)
+        topic = topic_data["text"]
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"⏳ Generando pieza {piece}/25 — whatsapp [{angle}]...",
@@ -3200,7 +3339,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fb_angles = ["proof", "curiosity"]
     for angle in fb_angles:
         piece += 1
-        topic = pick_topic("fbpost")
+        topic_data = smart_pick_topic(content_type="fbpost", angle=angle)
+        topic = topic_data["text"]
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"⏳ Generando pieza {piece}/25 — fbtext [{angle}]...",
@@ -3254,7 +3394,8 @@ async def _run_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for content_type, prompt_template, media_type, angle in batch:
             piece += 1
-            topic = pick_topic(content_type)
+            topic_data = smart_pick_topic(content_type=content_type, angle=angle)
+            topic = topic_data["text"]
             angle_instruction = get_angle_instruction(angle)
             seo_keywords = get_seo_keywords()
             formatted_prompt = prompt_template.format(
@@ -4138,7 +4279,8 @@ async def _predis_command_handler(
     else:
         angle, user_topic = parse_angle_and_topic(args)
 
-    topic = pick_topic(content_type, user_topic if user_topic else None)
+    topic_data = smart_pick_topic(content_type=content_type, angle=angle, user_topic=user_topic if user_topic else None)
+    topic = topic_data["text"]
 
     # Build the formatted prompt
     angle_instruction = get_angle_instruction(angle)
@@ -5056,7 +5198,9 @@ async def handle_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def main():
     """Start the bot."""
+    global topic_history
     load_content_log()
+    topic_history = load_topic_history()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Core commands
