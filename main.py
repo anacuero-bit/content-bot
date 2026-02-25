@@ -218,6 +218,7 @@ TEAM_CHAT_IDS = [
     for x in os.environ.get("TEAM_CHAT_IDS", "").split(",")
     if x.strip()
 ]
+# Keke added to team
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO_PH = os.environ.get("GITHUB_REPO_PH", "anacuero-bit/PH-Site")
 GITHUB_REPO_TP = os.environ.get("GITHUB_REPO_TP", "anacuero-bit/tus-papeles-2026")
